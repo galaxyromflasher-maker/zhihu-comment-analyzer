@@ -37,11 +37,23 @@ function categoryForStatus(status: number): LlmErrorCategory {
   return 'unknown';
 }
 
+/** 连接探测用短超时；分析 completions 用长超时。timeoutMs<=0 表示不限时。 */
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs = 12000,
 ): Promise<Response> {
+  if (!timeoutMs || timeoutMs <= 0) {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      throw new LlmError(
+        `无法连接 API：${error instanceof Error ? error.message : String(error)}`,
+        'network',
+      );
+    }
+  }
+
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -55,6 +67,9 @@ async function fetchWithTimeout(
     window.clearTimeout(timer);
   }
 }
+
+/** 议题树分析可能远超连接探测时间；10 分钟足够常规中转，又避免永久挂起。 */
+const CHAT_COMPLETION_TIMEOUT_MS = 600_000;
 
 function authHeaders(apiKey: string): HeadersInit {
   return {
@@ -144,7 +159,7 @@ export async function chatJson(
           { role: 'user', content: user },
         ],
       }),
-    });
+    }, CHAT_COMPLETION_TIMEOUT_MS);
   } catch (error) {
     throw error instanceof LlmError ? error : new LlmError(String(error), 'network');
   }

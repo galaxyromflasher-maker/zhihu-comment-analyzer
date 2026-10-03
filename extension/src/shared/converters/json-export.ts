@@ -181,19 +181,19 @@ export function buildExportBundle(options: BuildBundleOptions): ExportBundle {
       warnings.push(`一级评论请求中断（HTTP ${meta.rootErrorStatus}）`);
     }
   }
+  // 仅真实采集缺口（分页中断 / 楼中楼失败跳过 / 限流 / 根请求中断）标 partial。
+  // child_comment_count 声明差、抓取比例等软诊断只进 warnings，不硬停后续分析。
   const hasCollectionGap = Boolean(
     meta && (
       !meta.rootPaginationComplete ||
       meta.childFailedIds.length > 0 ||
       meta.childSkippedIds.length > 0 ||
       meta.childPaginationIncompleteIds.length > 0 ||
-      meta.rateLimited
+      meta.rateLimited ||
+      Boolean(meta.rootErrorStatus)
     ),
   );
-  const hasBlockingWarnings = warnings.some(
-    (warning) => !warning.startsWith('知乎 API totals='),
-  );
-  const status: ExportBundle['completeness']['status'] = hasCollectionGap || hasBlockingWarnings
+  const status: ExportBundle['completeness']['status'] = hasCollectionGap
     ? 'partial'
     : meta || expected != null
       ? 'complete'

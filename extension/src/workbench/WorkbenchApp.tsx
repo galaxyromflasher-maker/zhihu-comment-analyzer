@@ -251,10 +251,16 @@ export function WorkbenchApp() {
   const currentReportFilename = getReportFilename(reportFile, bundleSelection?.name, currentTitle);
   const currentStatus: TaskHistoryStatus = running
     ? 'running'
-    : error
-      ? 'failed'
-      : step === 'done'
-        ? 'completed'
+    : step === 'done'
+      ? 'completed'
+      : error
+        ? (
+          bundleSelection?.bundle.completeness.status === 'partial'
+            || metrics?.completenessStatus === 'partial'
+            || task?.mode === 'analyze'
+        )
+          ? 'partial'
+          : 'failed'
         : task?.mode === 'analyze'
           ? 'partial'
           : 'queued';
@@ -289,7 +295,13 @@ export function WorkbenchApp() {
   }, [activeHistoryId, task, bundleSelection, refreshHistory]);
 
   const updateSetting = <K extends keyof AnalysisSettings>(key: K, value: AnalysisSettings[K]) => {
-    setSettings((previous) => previous ? { ...previous, [key]: value } : previous);
+    setSettings((previous) => {
+      if (!previous) return previous;
+      const next = { ...previous, [key]: value };
+      // 模型下拉切换时立即落盘，避免只改选项未点保存就丢失。
+      if (key === 'model') void saveSettings(next);
+      return next;
+    });
     if (key !== 'model') setConnectionTest(null);
   };
 
@@ -402,13 +414,28 @@ export function WorkbenchApp() {
   const openReportInNewWindow = () => {
     if (!reportHtml) return;
     const url = URL.createObjectURL(new Blob([reportHtml], { type: 'text/html;charset=utf-8' }));
-    const popup = window.open(url, '_blank', 'noopener,noreferrer');
+    // 不要用 features 里的 noopener：部分浏览器会返回 null，导致误判并立刻 revoke blob。
+    const popup = window.open(url, '_blank');
     if (!popup) {
       URL.revokeObjectURL(url);
       setFailure(new Error('浏览器阻止了新窗口，请允许工作台打开报告页面。'));
       return;
     }
+    try {
+      popup.opener = null;
+    } catch {
+      // 个别环境禁止写 opener，忽略即可。
+    }
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+
+  const dismissPendingTask = async () => {
+    await clearPendingTask();
+    setTask(null);
+    autoStarted.current = true;
+    setError('');
+    pushLog('已忽略当前待处理任务；可从任务历史重新打开。', 'warn');
+    await refreshHistory();
   };
 
   const downloadReport = () => {
@@ -598,6 +625,9 @@ export function WorkbenchApp() {
           lastError: message,
         });
         pushLog('部分 bundle 已保留，可直接重新分析；若要重试知乎采集，请先完成验证后切换为重新采集。', 'warn');
+      } else {
+        // 终态失败不再保留 pending，避免每次打开工作台自动重跑同一失败任务。
+        await clearPendingTask();
       }
     } finally {
       setRunning(false);
@@ -799,7 +829,7 @@ export function WorkbenchApp() {
                 <section className={`error-panel error-${errorKind}`}>
                   <div className="error-icon">!</div>
                   <div className="error-copy"><span className="eyebrow">{ERROR_LABELS[errorKind]}</span><strong>{error}</strong><p>{errorKind === 'zhihu-403' ? '请在知乎页面完成验证或刷新来源页面，再回到这里重试。' : errorKind === 'analysis-schema' ? '可以先调整提示词或恢复默认模板，然后重新分析；已有 bundle 不会被删除。' : errorKind === 'folder' ? '目录权限只能由用户点击按钮恢复，工作台不会在页面加载时擅自弹窗。' : errorKind === 'api-auth' || errorKind === 'api-network' ? '检查 Base URL、模型和 API Key，先测试连接再重试。' : '可以查看诊断日志，或从任务历史重新打开 bundle。'}</p></div>
-                  <div className="error-actions"><button type="button" className="btn btn-secondary" onClick={openErrorTarget}>{errorKind === 'zhihu-403' || errorKind === 'missing-source' ? '打开来源' : errorKind === 'folder' ? '恢复权限' : errorKind === 'analysis-schema' ? '打开提示词' : '打开设置'}</button>{errorKind === 'zhihu-403' && task?.mode === 'analyze' && <button type="button" className="btn btn-secondary" onClick={() => void retryCollection()}>改为重新采集</button>}<button type="button" className="btn btn-primary" disabled={!setupOk || !hasRunnable || running} onClick={() => void start()}>重试</button></div>
+                  <div className="error-actions"><button type="button" className="btn btn-secondary" onClick={openErrorTarget}>{errorKind === 'zhihu-403' || errorKind === 'missing-source' ? '打开来源' : errorKind === 'folder' ? '恢复权限' : errorKind === 'analysis-schema' ? '打开提示词' : '打开设置'}</button>{errorKind === 'zhihu-403' && task?.mode === 'analyze' && <button type="button" className="btn btn-secondary" onClick={() => void retryCollection()}>改为重新采集</button>}{task && !running && <button type="button" className="btn btn-secondary" onClick={() => void dismissPendingTask()}>忽略任务</button>}<button type="button" className="btn btn-primary" disabled={!setupOk || !hasRunnable || running} onClick={() => void start()}>重试</button></div>
                 </section>
               )}
 

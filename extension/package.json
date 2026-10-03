@@ -1,0 +1,47 @@
+{
+  "name": "zhihu-analysis-collector",
+  "version": "0.2.0",
+  "description": "知乎分析采集器：评论采集、工作台进度、议题树 HTML 报告。基于 chouheiwa/download-zhihu 改造。",
+  "main": "background.js",
+  "directories": {
+    "doc": "docs",
+    "lib": "lib"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "keywords": ["zhihu", "comments", "bundle"],
+  "author": "",
+  "license": "ISC",
+  "homepage": "",
+  "dependencies": {
+    "@ant-design/cssinjs": "^2.1.2",
+    "antd": "^6.3.4",
+    "docx": "^9.6.1",
+    "jszip": "^3.10.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "temml": "^0.13.2",
+    "turndown": "^7.2.2",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.4.0",
+    "@types/chrome": "^0.1.38",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/turndown": "^5.0.6",
+    "@vitejs/plugin-react": "^6.0.1",
+    "jsdom": "^29.1.1",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.3",
+    "vitest": "^4.1.9"
+  }
+}

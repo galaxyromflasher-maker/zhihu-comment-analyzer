@@ -1,0 +1,226 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+      zip_name: ${{ steps.build.outputs.ZIP_NAME }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify package.json version matches tag
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION=${{ steps.version.outputs.VERSION }}
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag (v$TAG_VERSION)"
+            exit 1
+          fi
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Build ZIP
+        id: build
+        run: |
+          ZIP_NAME="DownloadZhihu-v${{ steps.version.outputs.VERSION }}.zip"
+          cd dist
+          zip -r "../$ZIP_NAME" . -x "*.DS_Store"
+          cd ..
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        run: |
+          set -e
+          {
+            node scripts/extract-changelog.mjs "${{ steps.version.outputs.VERSION }}" README.md
+            printf '\n\n## 安装方法\n\n### Chrome\n'
+            printf '1. 下载下方的 `${{ steps.build.outputs.ZIP_NAME }}` 文件\n'
+            printf '2. 解压到一个固定位置\n'
+            printf '3. 打开 Chrome，访问 `chrome://extensions/`\n'
+            printf '4. 右上角开启「开发者模式」\n'
+            printf '5. 点击「加载已解压的扩展程序」，选择解压后的文件夹\n'
+            printf '\n### Edge\n'
+            printf '1. 下载下方的 `${{ steps.build.outputs.ZIP_NAME }}` 文件\n'
+            printf '2. 解压到一个固定位置\n'
+            printf '3. 打开 Edge，访问 `edge://extensions/`\n'
+            printf '4. 左下角开启「开发人员模式」\n'
+            printf '5. 点击「加载解压缩的扩展」，选择解压后的文件夹\n'
+            printf '\n访问知乎任意文章/回答/收藏夹/专栏页面，右下角会出现蓝色浮动按钮。\n'
+          } > release-body.md
+          echo "::group::release-body.md"
+          cat release-body.md
+          echo "::endgroup::"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-zip
+          path: |
+            ${{ steps.build.outputs.ZIP_NAME }}
+            release-body.md
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ needs.build.outputs.version }}
+          body_path: release-body.md
+          files: ${{ needs.build.outputs.zip_name }}
+
+  # ==========================================
+  # Chrome Web Store 自动发布（Service Account + Chrome Web Store API V2）
+  # ==========================================
+  # 需要在仓库 Settings → Secrets 中配置：
+  #   CHROME_EXTENSION_ID          — 扩展 ID
+  #   CHROME_PUBLISHER_ID          — 发布者 ID（从开发者控制台获取）
+  #   CHROME_SERVICE_ACCOUNT_JSON  — Service Account JSON 密钥（整个文件内容）
+  publish-chrome:
+    needs: build
+    if: vars.CHROME_STORE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-zip
+
+      - name: Publish to Chrome Web Store
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          CHROME_SERVICE_ACCOUNT_JSON: ${{ secrets.CHROME_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -e
+
+          # 1. 从 Service Account JSON 中提取信息并构造 JWT
+          echo "::group::Fetching access token via Service Account"
+          SA_EMAIL=$(echo "$CHROME_SERVICE_ACCOUNT_JSON" | jq -r '.client_email')
+          SA_KEY=$(echo "$CHROME_SERVICE_ACCOUNT_JSON" | jq -r '.private_key')
+
+          NOW=$(date +%s)
+          EXP=$((NOW + 3600))
+          SCOPE="https://www.googleapis.com/auth/chromewebstore"
+          TOKEN_URI="https://oauth2.googleapis.com/token"
+
+          # Base64url 编码函数
+          b64url() {
+            openssl base64 -A | tr '+/' '-_' | tr -d '='
+          }
+
+          # 构造 JWT Header 和 Payload
+          JWT_HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
+          JWT_PAYLOAD=$(printf '{"iss":"%s","scope":"%s","aud":"%s","iat":%d,"exp":%d}' \
+            "$SA_EMAIL" "$SCOPE" "$TOKEN_URI" "$NOW" "$EXP" | b64url)
+
+          # 用私钥签名
+          JWT_SIGNATURE=$(printf '%s.%s' "$JWT_HEADER" "$JWT_PAYLOAD" | \
+            openssl dgst -sha256 -sign <(echo "$SA_KEY") | b64url)
+
+          JWT="${JWT_HEADER}.${JWT_PAYLOAD}.${JWT_SIGNATURE}"
+
+          # 用 JWT 换取 Access Token
+          TOKEN_RESPONSE=$(curl -s -f "$TOKEN_URI" \
+            -d "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer" \
+            -d "assertion=${JWT}")
+          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+          if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
+            echo "::error::Failed to obtain access token"
+            echo "$TOKEN_RESPONSE"
+            exit 1
+          fi
+          echo "Access token obtained successfully"
+          echo "::endgroup::"
+
+          # 2. 上传扩展包
+          echo "::group::Uploading extension"
+          UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -X POST \
+            -T "${{ needs.build.outputs.zip_name }}" \
+            "https://chromewebstore.googleapis.com/upload/v2/publishers/${CHROME_PUBLISHER_ID}/items/${CHROME_EXTENSION_ID}:upload")
+          UPLOAD_HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -1)
+          UPLOAD_BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+          echo "Upload response (HTTP ${UPLOAD_HTTP_CODE}):"
+          echo "$UPLOAD_BODY" | jq . 2>/dev/null || echo "$UPLOAD_BODY"
+          if [ "$UPLOAD_HTTP_CODE" -lt 200 ] || [ "$UPLOAD_HTTP_CODE" -ge 300 ]; then
+            echo "::error::Upload failed with HTTP ${UPLOAD_HTTP_CODE}"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          # 3. 提交发布
+          echo "::group::Publishing extension"
+          PUBLISH_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -X POST \
+            "https://chromewebstore.googleapis.com/v2/publishers/${CHROME_PUBLISHER_ID}/items/${CHROME_EXTENSION_ID}:publish")
+          PUBLISH_HTTP_CODE=$(echo "$PUBLISH_RESPONSE" | tail -1)
+          PUBLISH_BODY=$(echo "$PUBLISH_RESPONSE" | sed '$d')
+          echo "Publish response (HTTP ${PUBLISH_HTTP_CODE}):"
+          echo "$PUBLISH_BODY" | jq . 2>/dev/null || echo "$PUBLISH_BODY"
+          if [ "$PUBLISH_HTTP_CODE" -lt 200 ] || [ "$PUBLISH_HTTP_CODE" -ge 300 ]; then
+            echo "::error::Publish failed with HTTP ${PUBLISH_HTTP_CODE}"
+            exit 1
+          fi
+          echo "Extension published successfully!"
+          echo "::endgroup::"
+
+  # ==========================================
+  # Edge Add-ons 自动发布
+  # ==========================================
+  # 需要在仓库 Settings → Secrets 中配置：
+  #   EDGE_PRODUCT_ID  — 产品 ID（从 Partner Center 获取）
+  #   EDGE_CLIENT_ID   — API 客户端 ID
+  #   EDGE_API_KEY     — API 密钥（client secret）
+  publish-edge:
+    needs: build
+    if: vars.EDGE_STORE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-zip
+
+      - name: Publish to Edge Add-ons
+        uses: wdzeng/edge-addon@v2
+        with:
+          product-id: ${{ secrets.EDGE_PRODUCT_ID }}
+          zip-path: ${{ needs.build.outputs.zip_name }}
+          client-id: ${{ secrets.EDGE_CLIENT_ID }}
+          api-key: ${{ secrets.EDGE_API_KEY }}

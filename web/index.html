@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>知乎分析 · 提示词工作台</title>
+  <style>
+    :root {
+      --bg: #f3f1eb;
+      --panel: #fffdf8;
+      --ink: #1c1b19;
+      --muted: #5c574e;
+      --line: #d9d2c5;
+      --accent: #0f6a5c;
+      --accent-ink: #f4fffc;
+      --warn: #8a4b12;
+      --mono: "Cascadia Mono", "Sarasa Mono SC", "Consolas", monospace;
+      --sans: "Source Han Sans SC", "Noto Sans SC", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(900px 420px at 10% -10%, #e7efe9 0%, transparent 55%),
+        radial-gradient(700px 360px at 100% 0%, #efe6d8 0%, transparent 50%),
+        var(--bg);
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.25rem 1.5rem 0.75rem;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 253, 248, 0.85);
+      backdrop-filter: blur(8px);
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.25rem;
+      letter-spacing: 0.02em;
+    }
+    header p {
+      margin: 0.35rem 0 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 1rem;
+      padding: 1rem 1.5rem 2rem;
+    }
+    @media (max-width: 980px) {
+      main { grid-template-columns: 1fr; }
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1rem;
+    }
+    section h2 {
+      margin: 0 0 0.75rem;
+      font-size: 1rem;
+    }
+    label {
+      display: block;
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin: 0.6rem 0 0.3rem;
+    }
+    textarea, input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      font-size: 0.9rem;
+      background: #fff;
+      color: var(--ink);
+    }
+    textarea {
+      font-family: var(--mono);
+      line-height: 1.45;
+      resize: vertical;
+      min-height: 140px;
+    }
+    #system { min-height: 120px; }
+    #user_template { min-height: 280px; }
+    #preview_system, #preview_user {
+      min-height: 160px;
+      background: #f7f4ee;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.85rem;
+      align-items: center;
+    }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 0.55rem 0.9rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .meta {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.5rem;
+      word-break: break-all;
+    }
+    .status {
+      margin-top: 0.75rem;
+      font-size: 0.85rem;
+      color: var(--warn);
+      min-height: 1.2em;
+      white-space: pre-wrap;
+    }
+    .hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin: 0.25rem 0 0.5rem;
+    }
+    .tabs {
+      display: flex;
+      gap: 0.35rem;
+      margin-bottom: 0.5rem;
+    }
+    .tabs button {
+      background: #ebe6db;
+      color: var(--ink);
+    }
+    .tabs button.active {
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+    .pane { display: none; }
+    .pane.active { display: block; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>知乎分析 · 提示词工作台</h1>
+    <p>预览实际发给模型的 system / user；可改，保存后写入 <code>configs/prompts.json</code>。定稿后一般不用再动。</p>
+  </header>
+  <main>
+    <section>
+      <h2>编辑</h2>
+      <p class="hint">user 模板里请保留占位符 <code>{validation}</code> 与 <code>{corpus}</code>，运行时会被替换。</p>
+      <label for="system">System 提示词</label>
+      <textarea id="system"></textarea>
+      <label for="user_template">User 模板</label>
+      <textarea id="user_template"></textarea>
+      <div class="meta" id="prompt_path"></div>
+      <div class="row">
+        <button id="btn_save">保存</button>
+        <button class="secondary" id="btn_reload">重新加载</button>
+        <button class="secondary" id="btn_reset">恢复默认</button>
+      </div>
+      <div class="status" id="edit_status"></div>
+    </section>
+
+    <section>
+      <h2>预览 / 分析</h2>
+      <label for="bundle_select">样例 bundle</label>
+      <select id="bundle_select"></select>
+      <label for="bundle_path">或手动路径（相对项目根或绝对路径）</label>
+      <input id="bundle_path" placeholder="杂项/.../xxx.bundle.json" />
+      <div class="row">
+        <button id="btn_preview">生成预览</button>
+        <button class="secondary" id="btn_analyze">用当前已保存提示词跑分析</button>
+      </div>
+      <div class="meta" id="preview_meta"></div>
+      <div class="tabs">
+        <button type="button" class="active" data-tab="sys">预览 System</button>
+        <button type="button" data-tab="user">预览 User（含语料）</button>
+      </div>
+      <div class="pane active" id="pane_sys">
+        <textarea id="preview_system" readonly></textarea>
+      </div>
+      <div class="pane" id="pane_user">
+        <textarea id="preview_user" readonly></textarea>
+      </div>
+      <div class="status" id="preview_status"></div>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const editStatus = $("edit_status");
+    const previewStatus = $("preview_status");
+
+    function setStatus(el, msg, ok = false) {
+      el.style.color = ok ? "#0f6a5c" : "#8a4b12";
+      el.textContent = msg || "";
+    }
+
+    async function loadPrompts() {
+      const res = await fetch("/api/prompts");
+      const data = await res.json();
+      $("system").value = data.system;
+      $("user_template").value = data.user_template;
+      $("prompt_path").textContent = "保存路径: " + data.path;
+      setStatus(editStatus, "已加载提示词", true);
+    }
+
+    async function loadSamples() {
+      const res = await fetch("/api/sample-bundle");
+      const data = await res.json();
+      const sel = $("bundle_select");
+      sel.innerHTML = "";
+      const empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = data.samples.length ? "选择样例…" : "暂无 bundle 样例";
+      sel.appendChild(empty);
+      for (const s of data.samples) {
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = s;
+        sel.appendChild(opt);
+      }
+      if (data.samples[0]) {
+        sel.value = data.samples[0];
+        $("bundle_path").value = data.samples[0];
+      }
+    }
+
+    $("bundle_select").addEventListener("change", (e) => {
+      if (e.target.value) $("bundle_path").value = e.target.value;
+    });
+
+    $("btn_reload").onclick = () => loadPrompts().catch((e) => setStatus(editStatus, String(e)));
+    $("btn_save").onclick = async () => {
+      try {
+        const res = await fetch("/api/prompts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            system: $("system").value,
+            user_template: $("user_template").value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "保存失败");
+        $("prompt_path").textContent = "保存路径: " + data.path;
+        setStatus(editStatus, "已保存。CLI / 分析将使用这份提示词。", true);
+      } catch (e) {
+        setStatus(editStatus, String(e));
+      }
+    };
+    $("btn_reset").onclick = async () => {
+      if (!confirm("恢复内置默认提示词？当前编辑内容会被覆盖。")) return;
+      try {
+        const res = await fetch("/api/prompts/reset", { method: "POST" });
+        const data = await res.json();
+        $("system").value = data.system;
+        $("user_template").value = data.user_template;
+        $("prompt_path").textContent = "保存路径: " + data.path;
+        setStatus(editStatus, "已恢复默认并保存", true);
+      } catch (e) {
+        setStatus(editStatus, String(e));
+      }
+    };
+
+    document.querySelectorAll(".tabs button").forEach((btn) => {
+      btn.onclick = () => {
+        document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
+        document.querySelectorAll(".pane").forEach((p) => p.classList.remove("active"));
+        btn.classList.add("active");
+        $("pane_" + btn.dataset.tab).classList.add("active");
+      };
+    });
+
+    $("btn_preview").onclick = async () => {
+      setStatus(previewStatus, "生成预览中…");
+      try {
+        const res = await fetch("/api/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            system: $("system").value,
+            user_template: $("user_template").value,
+            bundle_path: $("bundle_path").value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
+        $("preview_system").value = data.system;
+        $("preview_user").value = data.user;
+        $("preview_meta").textContent =
+          `bundle: ${data.bundle} | 语料 ${data.corpus_chars} 字 | system ${data.system_chars} 字 | user ${data.user_chars} 字 | 校验 ${JSON.stringify(data.validation)}`;
+        setStatus(previewStatus, "预览完成（左侧未保存的修改也会用于本次预览）", true);
+      } catch (e) {
+        setStatus(previewStatus, String(e));
+      }
+    };
+
+    $("btn_analyze").onclick = async () => {
+      setStatus(previewStatus, "分析中，可能需要几十秒…");
+      try {
+        // 先保存当前编辑，避免预览改了但分析用旧文件
+        await fetch("/api/prompts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            system: $("system").value,
+            user_template: $("user_template").value,
+          }),
+        });
+        const res = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bundle_path: $("bundle_path").value }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
+        setStatus(
+          previewStatus,
+          `完成\nHTML: ${data.html || ""}\n议题树MD: ${data.topic_tree}\n报告MD: ${data.analysis}`,
+          true,
+        );
+      } catch (e) {
+        setStatus(previewStatus, String(e));
+      }
+    };
+
+    Promise.all([loadPrompts(), loadSamples()]).catch((e) => setStatus(editStatus, String(e)));
+  </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+.env
+configs/*.local.*
+__pycache__/
+*.pyc
+.venv/
+venv/
+extension/node_modules/
+extension/dist/
+extension/release/*.pem
+extension/release/*.crx
+extension/release/*.zip
+.DS_Store
+data/outputs/
+*.bundle.json.bak
+.cursor/
+临时中间文件目录/
+*.log

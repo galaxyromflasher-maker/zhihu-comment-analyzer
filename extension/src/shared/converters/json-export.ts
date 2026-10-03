@@ -9,6 +9,7 @@ import type {
   BundleCommentNode,
   ExportBundle,
   ZhihuAuthorRef,
+  CommentCollectionMeta,
 } from '@/types/zhihu';
 import { commentHtmlToText } from '@/shared/converters/html-to-markdown';
 import pkg from '../../../package.json';
@@ -102,9 +103,26 @@ function toNode(
 export interface BuildBundleOptions {
   content: ExtractedContent | ContentItem;
   comments: ZhihuComment[];
-  /** API paging.totals（一级评论总数，若有） */
+  /** 已知的总评论数；只有字段来源明确时才传入。 */
   expectedCommentCount?: number | null;
+  /** 本次 API 采集过程统计。 */
+  collectionMeta?: CommentCollectionMeta;
   warnings?: string[];
+}
+
+function collectChildWarnings(
+  comments: ZhihuComment[],
+  warnings: string[],
+): void {
+  for (const comment of comments) {
+    const children = comment.child_comments || [];
+    if (comment.child_comment_count > children.length) {
+      warnings.push(
+        `评论 ${comment.id} 声明子评 ${comment.child_comment_count}，实际抓到 ${children.length}`,
+      );
+    }
+    collectChildWarnings(children, warnings);
+  }
 }
 
 /**
@@ -120,15 +138,8 @@ export function buildExportBundle(options: BuildBundleOptions): ExportBundle {
     (content as ContentItem).commentCount ??
     null;
 
-  // 子评论缺口：API 声明 child_comment_count 但未拉全
-  for (const root of comments) {
-    const got = (root.child_comments || []).length;
-    if (root.child_comment_count > got) {
-      warnings.push(
-        `评论 ${root.id} 声明子评 ${root.child_comment_count}，实际抓到 ${got}`,
-      );
-    }
-  }
+  // 递归检查所有节点，避免只检查一级评论导致缺口被隐藏。
+  collectChildWarnings(comments, warnings);
 
   let captureRatio: number | null = null;
   if (typeof expected === 'number' && expected > 0) {
@@ -146,6 +157,48 @@ export function buildExportBundle(options: BuildBundleOptions): ExportBundle {
     content.url.match(/question\/(\d+)/)?.[1] ||
     null;
 
+  const meta = options.collectionMeta;
+  if (meta) {
+    if (meta.apiDeclaredCount != null) {
+      warnings.push(`知乎 API totals=${meta.apiDeclaredCount}，未将其直接作为抓全基准`);
+    }
+    if (!meta.rootPaginationComplete) {
+      warnings.push('一级评论分页未完整结束');
+    }
+    if (meta.childFailedIds.length > 0) {
+      warnings.push(`有 ${meta.childFailedIds.length} 个楼中楼请求失败`);
+    }
+    if (meta.childSkippedIds.length > 0) {
+      warnings.push(`有 ${meta.childSkippedIds.length} 个楼中楼请求因限流未执行`);
+    }
+    if (meta.childPaginationIncompleteIds.length > 0) {
+      warnings.push(`有 ${meta.childPaginationIncompleteIds.length} 个楼中楼分页未完整结束`);
+    }
+    if (meta.rateLimited) {
+      warnings.push('采集过程中触发知乎限流');
+    }
+    if (meta.rootErrorStatus) {
+      warnings.push(`一级评论请求中断（HTTP ${meta.rootErrorStatus}）`);
+    }
+  }
+  const hasCollectionGap = Boolean(
+    meta && (
+      !meta.rootPaginationComplete ||
+      meta.childFailedIds.length > 0 ||
+      meta.childSkippedIds.length > 0 ||
+      meta.childPaginationIncompleteIds.length > 0 ||
+      meta.rateLimited
+    ),
+  );
+  const hasBlockingWarnings = warnings.some(
+    (warning) => !warning.startsWith('知乎 API totals='),
+  );
+  const status: ExportBundle['completeness']['status'] = hasCollectionGap || hasBlockingWarnings
+    ? 'partial'
+    : meta || expected != null
+      ? 'complete'
+      : 'unknown';
+
   return {
     schema_version: SCHEMA_VERSION,
     source: {
@@ -159,10 +212,23 @@ export function buildExportBundle(options: BuildBundleOptions): ExportBundle {
       collector_version: pkg.version,
     },
     completeness: {
+      status,
       expected_comment_count: expected,
       captured_comment_count: captured,
       capture_ratio: captureRatio,
-      missing_reason: warnings.length ? warnings.join('; ') : null,
+      expected_root_count: null,
+      captured_root_count: comments.length,
+      api_declared_count: meta?.apiDeclaredCount ?? null,
+      api_total_scope: 'unknown',
+      child_requests: meta?.childRequests ?? 0,
+      child_completed: meta?.childCompleted ?? 0,
+      child_failed_ids: meta?.childFailedIds ?? [],
+      child_skipped_ids: meta?.childSkippedIds ?? [],
+      child_pagination_incomplete_ids: meta?.childPaginationIncompleteIds ?? [],
+      root_pages: meta?.rootPages ?? 0,
+      root_pagination_complete: meta?.rootPaginationComplete ?? false,
+      rate_limited: meta?.rateLimited ?? false,
+      missing_reason: status === 'complete' ? null : warnings.length ? warnings.join('; ') : null,
       warnings,
     },
     answer: {

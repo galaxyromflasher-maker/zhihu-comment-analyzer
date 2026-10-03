@@ -31,17 +31,29 @@ def validate_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
     comments = bundle.get("comments") or []
     flat = flatten_comments(comments)
     stats = bundle.get("stats") or {}
+    completeness = bundle.get("completeness") or {}
     declared = stats.get("total_nodes")
     captured = len(flat)
-    expected = (bundle.get("completeness") or {}).get("expected_comment_count")
+    expected = completeness.get("expected_comment_count")
     ratio = None
     if isinstance(expected, (int, float)) and expected > 0:
         ratio = min(1.0, captured / float(expected))
     return {
+        "completeness_status": completeness.get("status", "unknown"),
         "root_count": len(comments),
+        "captured_root_count": completeness.get("captured_root_count", len(comments)),
         "captured_comment_count": captured,
         "declared_total_nodes": declared,
         "expected_comment_count": expected,
+        "expected_root_count": completeness.get("expected_root_count"),
+        "api_declared_count": completeness.get("api_declared_count"),
+        "child_requests": completeness.get("child_requests", 0),
+        "child_completed": completeness.get("child_completed", 0),
+        "child_failed_ids": completeness.get("child_failed_ids", []),
+        "child_skipped_ids": completeness.get("child_skipped_ids", []),
+        "root_pagination_complete": completeness.get("root_pagination_complete", True),
+        "rate_limited": completeness.get("rate_limited", False),
+        "warnings": completeness.get("warnings", []),
         "capture_ratio": ratio,
         "nodes_match_declared": declared is None or declared == captured,
     }
@@ -67,6 +79,10 @@ def build_llm_corpus(bundle: dict[str, Any], *, answer_limit: int = 3500, commen
     lines.append(f"问题: {answer.get('question_title', '')}")
     lines.append(f"答主: {(answer.get('author') or {}).get('name', '')}")
     lines.append(f"评论节点数: {len(flat)}")
+    lines.append(f"数据状态: {(bundle.get('completeness') or {}).get('status', 'unknown')}")
+    bundle_warnings = (bundle.get("completeness") or {}).get("warnings") or []
+    if bundle_warnings:
+        lines.append(f"完整性提醒: {'; '.join(str(item) for item in bundle_warnings[:8])}")
     lines.append("")
     lines.append("【答主回答】")
     lines.append(_trim(answer.get("content_text"), answer_limit))

@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useRef } from 'react';
 import { Space, Tag, Radio, Checkbox, Button, Progress, Typography } from 'antd';
 import JSZip from 'jszip';
 
-import type { ExtractedContent, PageInfo } from '@/types/zhihu';
+import type { CommentFetchResult, ExtractedContent, PageInfo } from '@/types/zhihu';
 import { useFolderHandle } from '@/content/hooks/useFolderHandle';
 import {
   extractImageUrls,
@@ -92,17 +92,14 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
   }, [format, wantComment, wantBundle, wantImages, imgUrls.length]);
 
   const buildBundleText = useCallback(
-    (comments: ZhihuComment[], rootTotals: number) => {
+    (comments: ZhihuComment[], collection: CommentFetchResult) => {
       const warnings: string[] = [];
-      // comment_v5 的 paging.totals 通常是「全部评论数」（含楼中楼），不是一级条数
-      const expected =
-        content.commentCount ??
-        (rootTotals > 0 ? rootTotals : null);
       return stringifyBundle(
         buildExportBundle({
           content,
           comments,
-          expectedCommentCount: expected,
+          expectedCommentCount: content.commentCount ?? null,
+          collectionMeta: collection.collectionMeta,
           warnings,
         }),
       );
@@ -183,14 +180,15 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
         if (needComments) {
           setStatusText('正在加载评论...');
           addLog(`加载评论: type=${pageInfo.type}, id=${pageInfo.id}`);
-          const { comments, rootTotals } = await fetchAllComments(
+          const collection = await fetchAllComments(
             pageInfo.type,
             pageInfo.id,
             (done, total) => {
               showProgress(done, total, `正在加载子评论 ${done}/${total}...`);
             },
           );
-          addLog(`评论加载完成: ${comments.length} 条根评论（API 一级 totals=${rootTotals}）`);
+          const { comments, rootTotals } = collection;
+          addLog(`评论加载完成: ${comments.length} 条根评论（API totals=${rootTotals}，仅作声明值）`);
 
           let commentImageMapping: Record<string, string> = {};
           if (effectiveWantImages && comments.length > 0) {
@@ -212,7 +210,7 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
           if (wantBundle) {
             showProgress(1, 1, '正在生成 bundle.json...');
-            bundleText = buildBundleText(comments, rootTotals);
+            bundleText = buildBundleText(comments, collection);
             addLog(`bundle.json 节点数: ${JSON.parse(bundleText).stats.total_nodes}`);
           }
         }
@@ -277,13 +275,14 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
         if (needComments) {
           setStatusText('正在加载评论...');
           addLog(`加载评论: type=${pageInfo.type}, id=${pageInfo.id}`);
-          const { comments, rootTotals } = await fetchAllComments(
+          const collection = await fetchAllComments(
             pageInfo.type,
             pageInfo.id,
             (done, total) => {
               showProgress(done, total, `正在加载子评论 ${done}/${total}...`);
             },
           );
+          const { comments } = collection;
           addLog(`评论加载完成: ${comments.length} 条根评论`);
 
           const zip = new JSZip();
@@ -294,7 +293,7 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
             zip.file(`${baseName}-评论.docx`, commentBlob);
           }
           if (wantBundle) {
-            zip.file(bundleFileName, buildBundleText(comments, rootTotals));
+            zip.file(bundleFileName, buildBundleText(comments, collection));
           }
           showProgress(1, 1, '正在打包 ZIP...');
           const zipBlob = await zip.generateAsync(
@@ -375,13 +374,14 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
         if (needComments) {
           setStatusText('正在加载评论...');
-          const { comments, rootTotals } = await fetchAllComments(
+          const collection = await fetchAllComments(
             pageInfo.type,
             pageInfo.id,
             (done, total) => {
               showProgress(done, total, `正在加载子评论 ${done}/${total}...`);
             },
           );
+          const { comments } = collection;
           addLog(`评论加载完成: ${comments.length} 条根评论`);
 
           let commentImageMapping: Record<string, string> = {};
@@ -418,7 +418,7 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
           }
 
           if (wantBundle) {
-            await writeTextFile(handle, bundleFileName, buildBundleText(comments, rootTotals));
+            await writeTextFile(handle, bundleFileName, buildBundleText(comments, collection));
             addLog(`JSON 已保存: ${bundleFileName}`);
           }
         }
@@ -458,13 +458,14 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
         if (needComments) {
           setStatusText('正在加载评论...');
-          const { comments, rootTotals } = await fetchAllComments(
+          const collection = await fetchAllComments(
             pageInfo.type,
             pageInfo.id,
             (done, total) => {
               showProgress(done, total, `正在加载子评论 ${done}/${total}...`);
             },
           );
+          const { comments } = collection;
           addLog(`评论加载完成: ${comments.length} 条根评论`);
 
           if (wantComment) {
@@ -473,7 +474,7 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
             addLog(`评论已保存: ${baseName}-评论.docx`);
           }
           if (wantBundle) {
-            await writeTextFile(handle, bundleFileName, buildBundleText(comments, rootTotals));
+            await writeTextFile(handle, bundleFileName, buildBundleText(comments, collection));
             addLog(`JSON 已保存: ${bundleFileName}`);
           }
         }

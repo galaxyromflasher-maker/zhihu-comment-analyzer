@@ -137,6 +137,14 @@ def build_html_report(
     controversies = result.get("controversies") or []
     highlights = result.get("highlights") or []
     report_md = (result.get("report_markdown") or "").strip()
+    completeness = bundle.get("completeness") or {}
+    completeness_status = completeness.get("status", validation.get("completeness_status", "unknown"))
+    status_label = {
+        "complete": "采集完整",
+        "partial": "部分采集",
+        "unknown": "完整性未知",
+    }.get(completeness_status, "完整性未知")
+    completeness_warnings = completeness.get("warnings") or validation.get("warnings") or []
 
     tree_html = (
         f'<ul class="tree-root">{_render_tree_node(tree)}</ul>'
@@ -325,6 +333,10 @@ def build_html_report(
     .report-body h2, .report-body h3, .report-body h4 {{ margin: 1rem 0 0.4rem; }}
     .report-body p {{ margin: 0.4rem 0; }}
     .report-body ul {{ margin: 0.3rem 0 0.6rem 1.2rem; }}
+    .data-status {{ border-left: 4px solid var(--unknown); }}
+    .data-status.complete {{ border-left-color: var(--support); }}
+    .data-status.partial {{ border-left-color: var(--oppose); background: #fff8f5; }}
+    .data-status strong {{ margin-right: 0.8rem; }}
     footer.note {{
       color: var(--muted);
       font-size: 0.8rem;
@@ -338,10 +350,17 @@ def build_html_report(
     <header class="hero">
       <h1>{_esc(title)}</h1>
       <div class="meta">
-        答主：{_esc(author)} · 评论节点：{_esc(validation.get('captured_comment_count'))}
+        答主：{_esc(author)} · 评论节点：{_esc(validation.get('captured_comment_count'))} · 数据状态：{_esc(status_label)}
         {" · <a href='" + _esc(url) + "' target='_blank' rel='noopener'>原回答</a>" if url else ""}
       </div>
     </header>
+
+    <section class="card data-status {_esc(completeness_status)}" id="data-status">
+      <h2>数据状态</h2>
+      <p><strong>{_esc(status_label)}</strong> 总节点 {_esc(validation.get('captured_comment_count'))} · 一级 {_esc(validation.get('captured_root_count', validation.get('root_count')))}</p>
+      <p class="muted">楼中楼成功 {_esc(validation.get('child_completed', 0))} / {_esc(validation.get('child_requests', 0))}，一级分页{"已结束" if validation.get('root_pagination_complete', True) else "未完整结束"}。</p>
+      {("<ul>" + "".join(f"<li>{_esc(item)}</li>" for item in completeness_warnings[:8]) + "</ul>") if completeness_warnings else ""}
+    </section>
 
     <nav class="toc">
       <a href="#summary">答主摘要</a>

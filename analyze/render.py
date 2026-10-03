@@ -98,6 +98,8 @@ def build_analysis_doc(bundle: dict[str, Any], result: dict[str, Any], validatio
         f"- 答主：{(answer.get('author') or {}).get('name', '')}",
         f"- 来源：{source.get('url', '')}",
         f"- 评论节点：{validation.get('captured_comment_count')}",
+        f"- 数据状态：{validation.get('completeness_status', 'unknown')}",
+        f"- 完整性提醒：{'; '.join(str(item) for item in (validation.get('warnings') or [])[:8]) or '无'}",
         f"- 态度估算（支持/反对/中立）：{stance.get('support')}% / {stance.get('oppose')}% / {stance.get('neutral')}%",
         f"- 态度说明：{stance.get('note', '')}",
         "",

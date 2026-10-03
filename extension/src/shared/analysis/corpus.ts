@@ -61,10 +61,21 @@ export function buildCorpusFromBundle(bundle: ExportBundle): {
   }
 
   const validation = {
+    completeness_status: bundle.completeness.status,
     root_count: bundle.stats.root_count,
     captured_comment_count: flat.length,
     declared_total_nodes: bundle.stats.total_nodes,
     expected_comment_count: bundle.completeness.expected_comment_count,
+    expected_root_count: bundle.completeness.expected_root_count,
+    captured_root_count: bundle.completeness.captured_root_count,
+    api_declared_count: bundle.completeness.api_declared_count,
+    child_requests: bundle.completeness.child_requests,
+    child_completed: bundle.completeness.child_completed,
+    child_failed_ids: bundle.completeness.child_failed_ids,
+    child_skipped_ids: bundle.completeness.child_skipped_ids,
+    root_pagination_complete: bundle.completeness.root_pagination_complete,
+    rate_limited: bundle.completeness.rate_limited,
+    warnings: bundle.completeness.warnings,
     nodes_match_declared: bundle.stats.total_nodes === flat.length,
   };
 

@@ -61,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  议题树 : {info['topic_tree']}")
     print(f"  报告MD : {info['analysis']}")
     print(f"  原始JSON: {info['raw']}")
+    if info.get("analysis_warnings"):
+        print(f"  校验提醒: {'; '.join(info['analysis_warnings'])}")
     return 0
 
 

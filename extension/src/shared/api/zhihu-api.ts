@@ -6,7 +6,14 @@
 import * as throttle from './throttle';
 import { proxyFetchWithRetry, type FetchLikeResponse } from './proxy-fetch';
 import { ApiError } from '@/types/messages';
-import type { PageInfo, ContentItem, PaginatedResult, ZhihuComment, ZhihuAuthorRef } from '@/types/zhihu';
+import type {
+  PageInfo,
+  ContentItem,
+  PaginatedResult,
+  ZhihuComment,
+  ZhihuAuthorRef,
+  CommentFetchResult,
+} from '@/types/zhihu';
 
 // 检测是否运行在 Extension Page（非知乎域名）
 const isExtensionPage = typeof location !== 'undefined' && location.protocol === 'chrome-extension:';
@@ -216,12 +223,28 @@ const COMMENT_TYPE_MAP: Record<string, string> = {
   pin: 'pins',
 };
 
-export async function fetchRootComments(type: string, id: string): Promise<{ comments: ZhihuComment[]; totals: number }> {
+interface RootCommentsResult {
+  comments: ZhihuComment[];
+  totals: number;
+  pages: number;
+  paginationComplete: boolean;
+  errorStatus?: number;
+}
+
+export async function fetchRootComments(
+  type: string,
+  id: string,
+  options: { allowPartial?: boolean } = {},
+): Promise<RootCommentsResult> {
   const apiType = COMMENT_TYPE_MAP[type];
-  if (!apiType) return { comments: [], totals: 0 };
+  if (!apiType) {
+    return { comments: [], totals: 0, pages: 0, paginationComplete: true };
+  }
 
   const comments: ZhihuComment[] = [];
   let totals = 0;
+  let pages = 0;
+  let paginationComplete = false;
   let prevUrl = '';
   let nextUrl: string | null = `https://www.zhihu.com/api/v4/comment_v5/${apiType}/${id}/root_comment?order_by=score&limit=20&offset=`;
 
@@ -231,81 +254,127 @@ export async function fetchRootComments(type: string, id: string): Promise<{ com
       const err = new ApiError(
         response.status === 403
           ? '请求被知乎限流（HTTP 403），可能需要完成验证码验证。请在知乎页面完成验证后重试。'
-          : `评论 API 请求失败: ${response.status}`,
+        : `评论 API 请求失败: ${response.status}`,
         response.status
       );
+      if (options.allowPartial) {
+        return {
+          comments,
+          totals,
+          pages,
+          paginationComplete: false,
+          errorStatus: response.status,
+        };
+      }
       throw err;
     }
 
     const data = await response.json() as any;
     const paging = data.paging || {};
-    const pageData = data.data || [];
-    totals = paging.totals ?? totals;
+    const pageData = Array.isArray(data.data) ? data.data : [];
+    totals = typeof paging.totals === 'number' ? paging.totals : totals;
+    pages += 1;
 
     // 防止死循环：data 为空或 next 指向自身则停止
-    if (pageData.length === 0) break;
+    if (pageData.length === 0) {
+      paginationComplete = true;
+      break;
+    }
 
     comments.push(...pageData.map(normalizeComment));
 
-    if (paging.is_end) break;
+    if (paging.is_end) {
+      paginationComplete = true;
+      break;
+    }
     const candidate = paging.next || null;
     if (!candidate || candidate === prevUrl || candidate === nextUrl) break;
     prevUrl = nextUrl;
-    nextUrl = candidate;
+    nextUrl = fixHttpUrl(candidate);
   }
 
-  return { comments, totals };
+  return { comments, totals, pages, paginationComplete };
 }
 
-export async function fetchChildComments(rootCommentId: string): Promise<ZhihuComment[]> {
+interface ChildCommentsResult {
+  comments: ZhihuComment[];
+  pages: number;
+  paginationComplete: boolean;
+}
+
+export async function fetchChildComments(rootCommentId: string): Promise<ChildCommentsResult> {
   const children: ZhihuComment[] = [];
+  let pages = 0;
+  let paginationComplete = false;
   let prevUrl = '';
   let nextUrl: string | null = `https://www.zhihu.com/api/v4/comment_v5/comment/${rootCommentId}/child_comment?order_by=score&limit=20&offset=`;
 
   while (nextUrl) {
     const response = await apiFetch(nextUrl);
     if (!response.ok) {
-      throw new Error(`子评论请求失败: ${response.status}`);
+      throw new ApiError(`子评论请求失败: ${response.status}`, response.status);
     }
 
     const data = await response.json() as any;
     const paging = data.paging || {};
-    const pageData = data.data || [];
+    const pageData = Array.isArray(data.data) ? data.data : [];
+    pages += 1;
 
-    if (pageData.length === 0) break;
+    if (pageData.length === 0) {
+      paginationComplete = true;
+      break;
+    }
 
     children.push(...pageData.map(normalizeComment));
 
-    if (paging.is_end) break;
+    if (paging.is_end) {
+      paginationComplete = true;
+      break;
+    }
     const candidate = paging.next || null;
     if (!candidate || candidate === prevUrl || candidate === nextUrl) break;
     prevUrl = nextUrl;
-    nextUrl = candidate;
+    nextUrl = fixHttpUrl(candidate);
   }
 
-  return children;
+  return { comments: children, pages, paginationComplete };
 }
 
 export async function fetchAllComments(
   type: string,
   id: string,
-  onProgress?: (done: number, total: number) => void
-): Promise<{ comments: ZhihuComment[]; rootTotals: number }> {
-  const { comments, totals } = await fetchRootComments(type, id);
+  onProgress?: (done: number, total: number) => void,
+  options: { allowPartial?: boolean } = {},
+): Promise<CommentFetchResult> {
+  const roots = await fetchRootComments(type, id, options);
+  const { comments, totals } = roots;
 
   let rateLimited = false;
+  const childRequests = comments.filter((comment) => comment.child_comment_count > 0).length;
+  let childCompleted = 0;
+  const childFailedIds: string[] = [];
+  const childSkippedIds: string[] = [];
+  const childPaginationIncompleteIds: string[] = [];
+  let stoppedAt = comments.length;
 
   for (let i = 0; i < comments.length; i++) {
     const comment = comments[i];
 
     if (comment.child_comment_count > 0) {
       try {
-        comment.child_comments = await fetchChildComments(comment.id);
+        const childResult = await fetchChildComments(comment.id);
+        comment.child_comments = childResult.comments;
+        childCompleted += 1;
+        if (!childResult.paginationComplete) {
+          childPaginationIncompleteIds.push(comment.id);
+        }
       } catch (err: any) {
-        // 403 被限流时中断整个评论获取，提示用户
+        childFailedIds.push(comment.id);
         if (err.httpStatus === 403 || err.message?.includes('403')) {
           rateLimited = true;
           comment.child_comments = [];
+          onProgress?.(i + 1, comments.length);
+          stoppedAt = i + 1;
           break;
         }
         // 其他错误：跳过该评论的子评论，继续处理下一条
@@ -318,6 +387,16 @@ export async function fetchAllComments(
   }
 
   if (rateLimited) {
+    for (const comment of comments.slice(stoppedAt)) {
+      if (comment.child_comment_count > 0 && !childSkippedIds.includes(comment.id)) {
+        childSkippedIds.push(comment.id);
+      }
+    }
+  }
+
+  const rootRateLimited = roots.errorStatus === 403;
+  const hasRateLimit = rateLimited || rootRateLimited;
+  if (hasRateLimit && !options.allowPartial) {
     const err = new ApiError(
       '请求被知乎限流（HTTP 403），可能需要完成验证码验证。请在知乎页面完成验证后重试。',
       403
@@ -326,7 +405,22 @@ export async function fetchAllComments(
     throw err;
   }
 
-  return { comments, rootTotals: totals };
+  return {
+    comments,
+    rootTotals: totals,
+    collectionMeta: {
+      apiDeclaredCount: totals > 0 ? totals : null,
+      rootPages: roots.pages,
+      rootPaginationComplete: roots.paginationComplete,
+      childRequests,
+      childCompleted,
+      childFailedIds,
+      childSkippedIds,
+      childPaginationIncompleteIds,
+      rateLimited: hasRateLimit,
+      rootErrorStatus: roots.errorStatus,
+    },
+  };
 }
 
 // ============================

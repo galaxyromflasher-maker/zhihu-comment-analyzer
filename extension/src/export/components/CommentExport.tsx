@@ -165,13 +165,14 @@ export function CommentExport({ collectionId, collectionName }: Props) {
 
         try {
           addLog(`加载评论: ${displayTitle}（${item.type} #${item.id}）`, 'info');
-          const { comments, rootTotals } = await fetchAllComments(item.type, item.id, (done, total) => {
+          const collection = await fetchAllComments(item.type, item.id, (done, total) => {
             setCommentProgress({
               current: i + 1,
               total: selected.length,
               text: `${displayTitle.slice(0, 15)}... 子评论 ${done}/${total}`,
             });
           });
+          const { comments } = collection;
 
           const typeLabel = TYPE_LABELS[item.type] || item.type;
           const baseName = sanitizeFilename(buildItemName(item, typeLabel, 0));
@@ -220,7 +221,8 @@ export function CommentExport({ collectionId, collectionName }: Props) {
             buildExportBundle({
               content: item,
               comments,
-              expectedCommentCount: item.commentCount || (rootTotals > 0 ? rootTotals : null),
+              expectedCommentCount: item.commentCount ?? null,
+              collectionMeta: collection.collectionMeta,
               warnings: [],
             }),
           );

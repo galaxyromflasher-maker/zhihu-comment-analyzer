@@ -83,6 +83,27 @@ export interface ZhihuComment {
   comment_tag?: Array<{ type: string; text?: string }>;
 }
 
+/** 一次评论采集的过程统计，避免把一级评论数和总节点数混为一谈。 */
+export interface CommentCollectionMeta {
+  apiDeclaredCount: number | null;
+  rootPages: number;
+  rootPaginationComplete: boolean;
+  childRequests: number;
+  childCompleted: number;
+  childFailedIds: string[];
+  childSkippedIds: string[];
+  childPaginationIncompleteIds: string[];
+  rateLimited: boolean;
+  rootErrorStatus?: number;
+}
+
+/** 评论接口的完整返回，供报告流水线和传统导出分别决定如何处理部分结果。 */
+export interface CommentFetchResult {
+  comments: ZhihuComment[];
+  rootTotals: number;
+  collectionMeta: CommentCollectionMeta;
+}
+
 /** 分析用导出包中的评论节点 */
 export interface BundleCommentNode {
   id: string;
@@ -116,9 +137,22 @@ export interface ExportBundle {
     collector_version: string;
   };
   completeness: {
+    status: 'complete' | 'partial' | 'unknown';
     expected_comment_count: number | null;
     captured_comment_count: number;
     capture_ratio: number | null;
+    expected_root_count: number | null;
+    captured_root_count: number;
+    api_declared_count: number | null;
+    api_total_scope: 'unknown' | 'total_nodes' | 'root_nodes';
+    child_requests: number;
+    child_completed: number;
+    child_failed_ids: string[];
+    child_skipped_ids: string[];
+    child_pagination_incomplete_ids: string[];
+    root_pages: number;
+    root_pagination_complete: boolean;
+    rate_limited: boolean;
     missing_reason: string | null;
     warnings: string[];
   };

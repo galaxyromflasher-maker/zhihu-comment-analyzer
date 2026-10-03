@@ -1,5 +1,7 @@
 /* 自包含 HTML 报告（议题树可展开） */
 
+import type { ExportBundle } from '@/types/zhihu';
+
 type AnyRec = Record<string, unknown>;
 
 function esc(text: unknown): string {
@@ -97,6 +99,8 @@ export function buildHtmlReport(opts: {
   url: string;
   commentCount: number;
   result: AnyRec;
+  completeness?: ExportBundle['completeness'];
+  analysisWarnings?: string[];
 }): string {
   const stance = (opts.result.stance as AnyRec) || {};
   const support = Number(stance.support || 0);
@@ -108,6 +112,17 @@ export function buildHtmlReport(opts: {
   const summary = String(opts.result.answer_summary || '');
   const note = String(stance.note || '');
   const reportMd = String(opts.result.report_markdown || '');
+  const completeness = opts.completeness;
+  const status = completeness?.status || 'unknown';
+  const statusLabel = status === 'complete' ? '采集完整' : status === 'partial' ? '部分采集' : '完整性未知';
+  const statusClass = status === 'complete' ? 'complete' : status === 'partial' ? 'partial' : 'unknown';
+  const completenessWarnings = [
+    ...(completeness?.warnings || []),
+    ...(opts.analysisWarnings || []),
+  ];
+  const completenessHtml = completeness
+    ? `<section class="card data-status ${statusClass}"><h2>数据状态</h2><div class="status-line"><strong>${statusLabel}</strong><span>总节点 ${esc(completeness.captured_comment_count)} · 一级 ${esc(completeness.captured_root_count)}</span></div><p class="muted">楼中楼成功 ${esc(completeness.child_completed)} / ${esc(completeness.child_requests)}，一级分页${completeness.root_pagination_complete ? '已结束' : '未完整结束'}。</p>${completenessWarnings.length ? `<ul>${completenessWarnings.slice(0, 8).map((warning) => `<li>${esc(warning)}</li>`).join('')}</ul>` : ''}</section>`
+    : '';
 
   const treeHtml = tree
     ? `<ul class="tree-root">${renderNode(tree)}</ul>`
@@ -139,9 +154,13 @@ h1{margin:0 0 .4rem;font-size:1.35rem}.muted{color:var(--muted)}.badge{display:i
 details.tree-node>summary{list-style:none;cursor:pointer}details.tree-node>summary::-webkit-details-marker{display:none}
 .node-summary{margin:.35rem 0 0;color:var(--muted);font-size:.9rem}.chip{font-family:ui-monospace,monospace;font-size:.72rem;background:#efe9df;padding:.05rem .3rem;border-radius:4px}
 .quote-card{border:1px solid var(--line);border-radius:12px;padding:.7rem;margin:.5rem 0;background:#fff}
+.data-status.complete{border-color:#b6d4ba}.data-status.partial{border-color:#e0b7a8;background:#fff8f5}.data-status.unknown{border-color:#d7c99f;background:#fffdf3}
+.status-line{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}.data-status.partial strong{color:var(--oppose)}.data-status.complete strong{color:var(--support)}.data-status.unknown strong{color:var(--mixed)}
+.data-status ul{margin:.35rem 0 0 1.2rem;color:var(--muted);font-size:.86rem}
 a{color:var(--accent)}
 </style></head><body><div class="wrap">
 <section class="card"><h1>${esc(opts.title)}</h1><div class="muted">答主：${esc(opts.author)} · 评论 ${esc(opts.commentCount)}${opts.url ? ` · <a href="${esc(opts.url)}" target="_blank">原回答</a>` : ''}</div></section>
+${completenessHtml}
 <section class="card"><h2>答主摘要</h2><p>${esc(summary)}</p></section>
 <section class="card"><h2>态度估算</h2>
 <div class="bar"><span>支持</span><div class="track"><div class="fill s"></div></div><span>${support}%</span></div>

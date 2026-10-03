@@ -2,6 +2,8 @@ const IDB_NAME = 'zhihu-analysis-collector';
 const IDB_STORE = 'handles';
 const IDB_KEY = 'workbench-temp-folder';
 
+export type DirectoryPermissionState = 'granted' | 'prompt' | 'denied' | 'missing' | 'unknown';
+
 function openIDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(IDB_NAME, 1);
@@ -73,4 +75,41 @@ export async function writeTextToDir(
   const w = await fh.createWritable();
   await w.write(text);
   await w.close();
+}
+
+export async function readTextFromDir(
+  dir: FileSystemDirectoryHandle,
+  filename: string,
+): Promise<string> {
+  const fh = await dir.getFileHandle(filename);
+  const file = await fh.getFile();
+  return file.text();
+}
+
+export async function pickBundleFile(): Promise<{ name: string; text: string } | null> {
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      multiple: false,
+      types: [{ description: '知乎分析 bundle', accept: { 'application/json': ['.json'] } }],
+    });
+    if (!handle) return null;
+    const file = await handle.getFile();
+    return { name: file.name, text: await file.text() };
+  } catch {
+    return null;
+  }
+}
+
+/** 只查询权限，不触发浏览器权限弹窗。 */
+export async function inspectDirPermission(
+  handle: FileSystemDirectoryHandle | null,
+): Promise<DirectoryPermissionState> {
+  if (!handle) return 'missing';
+  try {
+    const state = await handle.queryPermission({ mode: 'readwrite' });
+    if (state === 'granted' || state === 'prompt' || state === 'denied') return state;
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }

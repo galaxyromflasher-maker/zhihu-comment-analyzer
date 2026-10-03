@@ -188,8 +188,11 @@ async function analyzeBundleAndWriteReport(opts: {
     percent: 68,
     metrics: { ...bundleMetrics, modelInputChars: corpus.length },
   });
-  const result = await chatJson(settings, settings.system, user);
-  const resultValidation = assertValidAnalysisResult(result, getCommentIds(bundle));
+  const rawResult = await chatJson(settings, settings.system, user);
+  const { normalized: result, validation: resultValidation } = assertValidAnalysisResult(
+    rawResult,
+    getCommentIds(bundle),
+  );
 
   for (const warning of resultValidation.warnings) {
     onProgress({ step: 'analyze', message: `模型结果提醒：${warning}`, percent: 84 });
@@ -226,9 +229,13 @@ export async function renderExistingReport(opts: {
   dir: FileSystemDirectoryHandle;
   onProgress: (e: ProgressEvent) => void;
 }): Promise<RunReportResult> {
-  const validation = assertValidAnalysisResult(opts.result, getCommentIds(opts.bundle));
+  const { normalized, validation } = assertValidAnalysisResult(
+    opts.result,
+    getCommentIds(opts.bundle),
+  );
   return renderBundleAndWriteReport({
     ...opts,
+    result: normalized,
     analysisWarnings: validation.warnings,
     renderMessage: '正在使用已有分析结果重新渲染报告…',
   });

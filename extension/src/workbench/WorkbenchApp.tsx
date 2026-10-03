@@ -183,8 +183,7 @@ export function WorkbenchApp() {
   const [connectionTest, setConnectionTest] = useState<LlmConnectionResult | null>(null);
   const [manualModel, setManualModel] = useState(false);
   const [promptNotice, setPromptNotice] = useState('');
-  const [expandedLogs, setExpandedLogs] = useState(false);
-  const autoStarted = useRef(false);
+  const [logViewerOpen, setLogViewerOpen] = useState(false);
   const logEnd = useRef<HTMLDivElement>(null);
 
   const pushLog = useCallback((msg: string, level: LogLine['level'] = 'info') => {
@@ -218,7 +217,7 @@ export function WorkbenchApp() {
       setTask(pending);
       if (pending) {
         setActiveHistoryId(pending.id);
-        pushLog(`已接收任务：${pending.content.title}`, 'ok');
+        pushLog(`已预填任务：${pending.content.title}。确认连接与目录后点击「启动」。`, 'ok');
         if (pending.mode === 'analyze' && pending.bundleFile && savedDir) {
           try {
             setBundleSelection({
@@ -231,7 +230,7 @@ export function WorkbenchApp() {
           }
         }
       } else {
-        pushLog('暂无待处理任务。可以从知乎回答页创建任务，或载入已有 bundle。', 'warn');
+        pushLog('工作台可随时打开。可从工具栏图标进入，或从知乎页「打开工作台」预填任务后点「启动」。', 'warn');
       }
       setReady(true);
     })().catch((cause) => {
@@ -247,7 +246,7 @@ export function WorkbenchApp() {
   const currentAuthor = bundleSelection?.bundle.answer.author.name || task?.content.author || '等待知乎任务';
   const currentUrl = bundleSelection?.bundle.source.url || task?.content.url || '';
   const currentMetrics = metrics || (bundleSelection ? metricsFromBundle(bundleSelection.bundle) : null);
-  const visibleLogs = expandedLogs ? logs : logs.slice(-6);
+  const visibleLogs = logs.slice(-6);
   const currentReportFilename = getReportFilename(reportFile, bundleSelection?.name, currentTitle);
   const currentStatus: TaskHistoryStatus = running
     ? 'running'
@@ -408,7 +407,8 @@ export function WorkbenchApp() {
   };
 
   const jumpToLatestLog = () => {
-    logEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    setLogViewerOpen(true);
+    window.setTimeout(() => logEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 0);
   };
 
   const openReportInNewWindow = () => {
@@ -432,7 +432,6 @@ export function WorkbenchApp() {
   const dismissPendingTask = async () => {
     await clearPendingTask();
     setTask(null);
-    autoStarted.current = true;
     setError('');
     pushLog('已忽略当前待处理任务；可从任务历史重新打开。', 'warn');
     await refreshHistory();
@@ -635,12 +634,6 @@ export function WorkbenchApp() {
     }
   }, [settings, dir, task, bundleSelection, running, applyProgress, setFailure, updateHistoryForCurrent, pushLog, refreshHistory]);
 
-  useEffect(() => {
-    if (!ready || autoStarted.current || !task || !setupOk || running) return;
-    autoStarted.current = true;
-    void start();
-  }, [ready, task, setupOk, running, start]);
-
   const retryCollection = async () => {
     if (!task) return;
     const freshTask: ReportTask = { ...task, mode: 'collect', bundleFile: undefined };
@@ -724,7 +717,11 @@ export function WorkbenchApp() {
     );
   }
 
-  const runnableLabel = running ? '处理中…' : bundleSelection || task?.mode === 'analyze' ? '重新分析 bundle' : '开始采集分析';
+  const runnableLabel = running
+    ? '处理中…'
+    : bundleSelection || task?.mode === 'analyze'
+      ? '启动分析'
+      : '启动';
   const sourceHost = currentUrl ? (() => { try { return new URL(currentUrl).hostname; } catch { return currentUrl; } })() : '等待来源';
 
   return (
@@ -780,7 +777,7 @@ export function WorkbenchApp() {
                 <div className="heading-actions"><button type="button" className="btn btn-secondary" onClick={() => void onPickBundle()}>载入 bundle</button><button type="button" className="btn btn-secondary" onClick={() => void refreshHistory()}>刷新</button></div>
               </div>
               {history.length === 0 ? (
-                <div className="empty-state large-empty"><span className="empty-icon">◷</span><h2>还没有历史任务</h2><p>从知乎回答页点击“生成报告”，任务完成后会自动出现在这里。</p></div>
+                <div className="empty-state large-empty"><span className="empty-icon">◷</span><h2>还没有历史任务</h2><p>从知乎页「打开工作台」并点「启动」完成后，记录会出现在这里；也可随时用工具栏图标打开本控制台。</p></div>
               ) : (
                 <div className="history-list">
                   {history.map((entry) => (
@@ -802,7 +799,7 @@ export function WorkbenchApp() {
               )}
             </section>
           ) : (
-            <>
+            <div className="dashboard">
               <section className="task-hero">
                 <div className="hero-copy">
                   <div className="hero-kicker"><span className={`tag tag-${currentStatus}`}>{statusLabel(currentStatus)}</span><span className="hero-source">{sourceHost}</span></div>
@@ -817,72 +814,47 @@ export function WorkbenchApp() {
                 </div>
               </section>
 
-              {!setupOk && (
-                <section className="setup-strip">
-                  <div className="setup-icon">!</div>
-                  <div><strong>{!settings.apiKey.trim() ? '先配置模型连接' : folderPermission !== 'granted' ? '先授权数据目录' : '准备工作台'}</strong><span>{!settings.apiKey.trim() ? '填写 API Key 后测试连接，报告分析才会启动。' : '浏览器需要一次明确的用户操作来恢复本地目录权限。'}</span></div>
-                  <button type="button" className="btn btn-secondary" onClick={() => { setSettingsOpen(true); setDrawerTab(!settings.apiKey.trim() ? 'connection' : 'storage'); }}>{!settings.apiKey.trim() ? '打开连接设置' : '恢复目录权限'}</button>
-                </section>
-              )}
-
-              {error && (
-                <section className={`error-panel error-${errorKind}`}>
-                  <div className="error-icon">!</div>
-                  <div className="error-copy"><span className="eyebrow">{ERROR_LABELS[errorKind]}</span><strong>{error}</strong><p>{errorKind === 'zhihu-403' ? '请在知乎页面完成验证或刷新来源页面，再回到这里重试。' : errorKind === 'analysis-schema' ? '可以先调整提示词或恢复默认模板，然后重新分析；已有 bundle 不会被删除。' : errorKind === 'folder' ? '目录权限只能由用户点击按钮恢复，工作台不会在页面加载时擅自弹窗。' : errorKind === 'api-auth' || errorKind === 'api-network' ? '检查 Base URL、模型和 API Key，先测试连接再重试。' : '可以查看诊断日志，或从任务历史重新打开 bundle。'}</p></div>
-                  <div className="error-actions"><button type="button" className="btn btn-secondary" onClick={openErrorTarget}>{errorKind === 'zhihu-403' || errorKind === 'missing-source' ? '打开来源' : errorKind === 'folder' ? '恢复权限' : errorKind === 'analysis-schema' ? '打开提示词' : '打开设置'}</button>{errorKind === 'zhihu-403' && task?.mode === 'analyze' && <button type="button" className="btn btn-secondary" onClick={() => void retryCollection()}>改为重新采集</button>}{task && !running && <button type="button" className="btn btn-secondary" onClick={() => void dismissPendingTask()}>忽略任务</button>}<button type="button" className="btn btn-primary" disabled={!setupOk || !hasRunnable || running} onClick={() => void start()}>重试</button></div>
-                </section>
-              )}
-
-              <section className="metric-grid" aria-label="采集指标">
-                <MetricCard label="评论节点" value={formatNumber(currentMetrics?.totalNodes)} detail={currentMetrics?.expectedCommentCount != null ? `声明值 ${formatNumber(currentMetrics.expectedCommentCount)}` : '实际抓取总数'} accent="blue" />
-                <MetricCard label="一级评论" value={formatNumber(currentMetrics?.rootCount)} detail={currentMetrics ? `${currentMetrics.rootPages} 页根评论` : '等待采集'} accent="cyan" />
-                <MetricCard label="楼中楼" value={currentMetrics ? `${currentMetrics.childCompleted}/${currentMetrics.childRequests}` : '—'} detail={currentMetrics?.childFailed || currentMetrics?.childSkipped ? `失败 ${currentMetrics.childFailed} · 跳过 ${currentMetrics.childSkipped}` : '请求完成数 / 请求总数'} accent="violet" />
-                <MetricCard label="数据完整性" value={currentMetrics ? completenessLabel(currentMetrics.completenessStatus) : '待确认'} detail={currentMetrics?.rateLimited ? '检测到 403 限流' : currentMetrics?.rootPaginationComplete ? '根评论分页已结束' : '分页状态待确认'} accent={currentMetrics?.completenessStatus === 'partial' ? 'amber' : 'green'} />
-                <MetricCard label="模型输入" value={currentMetrics?.modelInputChars ? `${formatNumber(currentMetrics.modelInputChars)} 字` : '—'} detail={currentMetrics?.modelInputChars ? '发送给模型的语料长度' : '分析开始后显示'} accent="pink" />
+              <section className="panel pipeline-panel">
+                <div className="panel-heading"><div><span className="eyebrow">PIPELINE</span><h2>处理流程</h2></div><strong className="percent-label">{percent}%</strong></div>
+                <div className="progress-line"><i style={{ width: `${percent}%` }} /></div>
+                <div className="timeline">
+                  {stepState.map((item) => <div className={`timeline-item ${item.state}`} key={item.id}><span className="timeline-dot">{item.state === 'done' ? '✓' : item.state === 'error' ? '!' : ''}</span><div><strong>{item.label}</strong><span>{item.desc}</span></div></div>)}
+                </div>
               </section>
 
-              <section className="content-grid">
-                <div className="main-column">
-                  <section className="panel report-panel">
-                    <div className="panel-heading">
-                      <div><span className="eyebrow">OUTPUT</span><h2>分析报告</h2></div>
-                      {reportHtml && <span className="live-label"><i />已生成</span>}
-                    </div>
-                    {reportHtml ? (
-                      <div className="report-ready">
-                        <div className="report-ready-icon">◫</div>
-                        <div className="report-ready-copy"><strong>{currentReportFilename}</strong><span>报告已生成，选择一种阅读方式</span></div>
-                        <div className="report-actions">
-                          <button type="button" className="btn btn-primary" onClick={() => setReportOpen(true)}>展开阅读</button>
-                          <button type="button" className="btn btn-secondary" onClick={openReportInNewWindow}>新窗口打开</button>
-                          <button type="button" className="btn btn-secondary" onClick={downloadReport}>下载报告</button>
-                          <button type="button" className="btn btn-secondary" disabled={!dir} onClick={() => void saveReportToFolder()}>保存到目录</button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="empty-state"><span className="empty-icon">◫</span><h3>{hasRunnable ? '报告将在这里出现' : '等待一个分析任务'}</h3><p>{hasRunnable ? '启动流水线后，报告会在这里提供全屏阅读、下载和保存操作。' : '从知乎页面创建任务，或载入已有 bundle 开始分析。'}</p></div>
-                    )}
+              <section className="dashboard-body">
+                <div className="dashboard-main">
+                  <div className="dashboard-notices">
+                    {!setupOk && <section className="setup-strip"><div className="setup-icon">!</div><div><strong>{!settings.apiKey.trim() ? '先配置模型连接' : folderPermission !== 'granted' ? '先授权数据目录' : '准备工作台'}</strong><span>{!settings.apiKey.trim() ? '填写 API Key 后测试连接，再点「启动」。' : '浏览器需要一次明确的用户操作来恢复本地目录权限。'}</span></div><button type="button" className="btn btn-secondary" onClick={() => { setSettingsOpen(true); setDrawerTab(!settings.apiKey.trim() ? 'connection' : 'storage'); }}>{!settings.apiKey.trim() ? '打开连接设置' : '恢复目录权限'}</button></section>}
+                    {setupOk && hasRunnable && !running && !error && step !== 'done' && <section className="setup-strip ready-strip"><div className="setup-icon">▶</div><div><strong>任务已就绪，等待启动</strong><span>不会自动执行。确认模型、目录与任务来源后，点击「{runnableLabel}」开始生成报告。</span></div><button type="button" className="btn btn-primary" onClick={() => void start()}>{runnableLabel}</button></section>}
+                    {error && <section className={`error-panel error-${errorKind}`}><div className="error-icon">!</div><div className="error-copy"><span className="eyebrow">{ERROR_LABELS[errorKind]}</span><strong>{error}</strong><p>{errorKind === 'zhihu-403' ? '请在知乎页面完成验证或刷新来源页面，再回到这里重试。' : errorKind === 'analysis-schema' ? '可以先调整提示词或恢复默认模板，然后重新分析；已有 bundle 不会被删除。' : errorKind === 'folder' ? '目录权限只能由用户点击按钮恢复，工作台不会在页面加载时擅自弹窗。' : errorKind === 'api-auth' || errorKind === 'api-network' ? '检查 Base URL、模型和 API Key，先测试连接再重试。' : '可以查看诊断日志，或从任务历史重新打开 bundle。'}</p></div><div className="error-actions"><button type="button" className="btn btn-secondary" onClick={openErrorTarget}>{errorKind === 'zhihu-403' || errorKind === 'missing-source' ? '打开来源' : errorKind === 'folder' ? '恢复权限' : errorKind === 'analysis-schema' ? '打开提示词' : '打开设置'}</button>{errorKind === 'zhihu-403' && task?.mode === 'analyze' && <button type="button" className="btn btn-secondary" onClick={() => void retryCollection()}>改为重新采集</button>}{task && !running && <button type="button" className="btn btn-secondary" onClick={() => void dismissPendingTask()}>忽略任务</button>}<button type="button" className="btn btn-primary" disabled={!setupOk || !hasRunnable || running} onClick={() => void start()}>重试</button></div></section>}
+                  </div>
+
+                  <section className="metric-grid" aria-label="采集指标">
+                    <MetricCard label="评论节点" value={formatNumber(currentMetrics?.totalNodes)} detail={currentMetrics?.expectedCommentCount != null ? `声明值 ${formatNumber(currentMetrics.expectedCommentCount)}` : '实际抓取总数'} accent="blue" />
+                    <MetricCard label="一级评论" value={formatNumber(currentMetrics?.rootCount)} detail={currentMetrics ? `${currentMetrics.rootPages} 页根评论` : '等待采集'} accent="cyan" />
+                    <MetricCard label="楼中楼" value={currentMetrics ? `${currentMetrics.childCompleted}/${currentMetrics.childRequests}` : '—'} detail={currentMetrics?.childFailed || currentMetrics?.childSkipped ? `失败 ${currentMetrics.childFailed} · 跳过 ${currentMetrics.childSkipped}` : '请求完成数 / 请求总数'} accent="violet" />
+                    <MetricCard label="数据完整性" value={currentMetrics ? completenessLabel(currentMetrics.completenessStatus) : '待确认'} detail={currentMetrics?.rateLimited ? '检测到 403 限流' : currentMetrics?.rootPaginationComplete ? '根评论分页已结束' : '分页状态待确认'} accent={currentMetrics?.completenessStatus === 'partial' ? 'amber' : 'green'} />
+                    <MetricCard label="模型输入" value={currentMetrics?.modelInputChars ? `${formatNumber(currentMetrics.modelInputChars)} 字` : '—'} detail={currentMetrics?.modelInputChars ? '发送给模型的语料长度' : '分析开始后显示'} accent="pink" />
                   </section>
 
-                  <section className="panel timeline-panel">
-                    <div className="panel-heading"><div><span className="eyebrow">PIPELINE</span><h2>处理流程</h2></div><strong className="percent-label">{percent}%</strong></div>
-                    <div className="progress-line"><i style={{ width: `${percent}%` }} /></div>
-                    <div className="timeline">
-                      {stepState.map((item) => <div className={`timeline-item ${item.state}`} key={item.id}><span className="timeline-dot">{item.state === 'done' ? '✓' : item.state === 'error' ? '!' : ''}</span><div><strong>{item.label}</strong><span>{item.desc}</span></div></div>)}
-                    </div>
+                  <section className="panel report-panel">
+                    <div className="panel-heading"><div><span className="eyebrow">OUTPUT</span><h2>分析报告</h2></div>{reportHtml && <span className="live-label"><i />已生成</span>}</div>
+                    {reportHtml ? <div className="report-ready"><div className="report-ready-icon">◫</div><div className="report-ready-copy"><strong>{currentReportFilename}</strong><span>报告已生成，选择一种阅读方式</span></div><div className="report-actions"><button type="button" className="btn btn-primary" onClick={() => setReportOpen(true)}>展开阅读</button><button type="button" className="btn btn-secondary" onClick={openReportInNewWindow}>新窗口打开</button><button type="button" className="btn btn-secondary" onClick={downloadReport}>下载报告</button><button type="button" className="btn btn-secondary" disabled={!dir} onClick={() => void saveReportToFolder()}>保存到目录</button></div></div> : <div className="empty-state"><span className="empty-icon">◫</span><h3>{hasRunnable ? '报告将在这里出现' : '等待一个分析任务'}</h3><p>{hasRunnable ? '点击「启动」后才会开始采集与分析；完成后可在此阅读、下载或保存。' : '从知乎页「打开工作台」预填任务，或载入已有 bundle。'}</p></div>}
                   </section>
                 </div>
 
-                <aside className="insight-column">
+                <aside className="dashboard-side">
+                  <section className="panel log-panel">
+                    <div className="panel-heading"><div><span className="eyebrow">LIVE DIAGNOSTICS</span><h2>实时诊断</h2></div><div className="log-actions"><span className="log-count">{logs.length} 条</span><button type="button" className="text-button" onClick={() => setLogViewerOpen(true)}>查看全部</button>{logs.length > 6 && <button type="button" className="text-button" onClick={jumpToLatestLog}>最新</button>}</div></div>
+                    <div className="log-stage"><span className={`stage-dot ${running ? 'running' : error ? 'error' : step === 'done' ? 'done' : 'idle'}`} /><span>{running ? `正在${STEPS.find((item) => item.id === step)?.label || '处理'}` : error ? ERROR_LABELS[errorKind] : step === 'done' ? '任务已完成' : '等待启动'}</span><strong>{percent}%</strong></div>
+                    <div className="log-list">{visibleLogs.length ? visibleLogs.map((line, index) => <div className={`log-line ${line.level}`} key={`${line.t}-${index}`}><span>{line.t}</span><p>{line.msg}</p></div>) : <div className="log-empty">暂无日志</div>}</div>
+                  </section>
                   <section className="panel quality-panel"><div className="panel-heading"><div><span className="eyebrow">COLLECTION HEALTH</span><h2>采集健康度</h2></div></div><QualityRow label="根评论分页" value={currentMetrics ? currentMetrics.rootPaginationComplete ? '已完成' : '未完成' : '—'} good={Boolean(currentMetrics?.rootPaginationComplete)} /><QualityRow label="楼中楼分页" value={currentMetrics ? currentMetrics.childPaginationIncomplete ? `${currentMetrics.childPaginationIncomplete} 条未完成` : '已完成' : '—'} good={Boolean(currentMetrics && currentMetrics.childPaginationIncomplete === 0)} /><QualityRow label="失败 / 跳过" value={currentMetrics ? `${currentMetrics.childFailed} / ${currentMetrics.childSkipped}` : '—'} good={Boolean(currentMetrics && currentMetrics.childFailed === 0 && currentMetrics.childSkipped === 0)} /><QualityRow label="限流状态" value={currentMetrics ? currentMetrics.rateLimited ? '需要处理' : '正常' : '—'} good={Boolean(currentMetrics && !currentMetrics.rateLimited)} /></section>
                   <section className="panel task-panel"><div className="panel-heading"><div><span className="eyebrow">TASK CONTEXT</span><h2>任务信息</h2></div></div><InfoRow label="数据目录" value={dir?.name || settings.folderName || '未选择'} /><InfoRow label="目录权限" value={permissionLabel(folderPermission)} tone={folderPermission === 'granted' ? 'good' : 'warn'} /><InfoRow label="当前来源" value={sourceHost} /><InfoRow label="任务模式" value={bundleSelection || task?.mode === 'analyze' ? '仅分析 bundle' : task ? '重新采集' : '无任务'} /></section>
-                  <section className="panel log-panel">
-                    <div className="panel-heading"><div><span className="eyebrow">DIAGNOSTICS</span><h2>诊断日志</h2></div><div className="log-actions"><button type="button" className="text-button" onClick={() => setExpandedLogs((value) => !value)}>{expandedLogs ? '显示最近' : `显示全部${logs.length > 6 ? `（${logs.length}）` : ''}`}</button>{logs.length > 6 && <button type="button" className="text-button" onClick={jumpToLatestLog}>跳到最新</button>}</div></div>
-                    <div className={`log-list ${expandedLogs ? 'expanded' : ''}`}>{visibleLogs.length ? visibleLogs.map((line, index) => <div className={`log-line ${line.level}`} key={`${line.t}-${index}`}><span>{line.t}</span><p>{line.msg}</p></div>) : <div className="log-empty">暂无日志</div>}<div ref={logEnd} /></div>
-                  </section>
                 </aside>
               </section>
-            </>
+            </div>
           )}
         </main>
       </div>
@@ -895,6 +867,15 @@ export function WorkbenchApp() {
               <div className="report-viewer-actions"><button type="button" className="btn btn-secondary" onClick={downloadReport}>下载</button><button type="button" className="btn btn-secondary" onClick={() => void saveReportToFolder()}>保存到目录</button><button type="button" className="icon-button" title="关闭报告阅读器" aria-label="关闭报告阅读器" onClick={() => setReportOpen(false)}>×</button></div>
             </header>
             <iframe className="report-viewer-frame" title="知乎分析报告阅读器" srcDoc={reportHtml} />
+          </section>
+        </div>
+      )}
+
+      {logViewerOpen && (
+        <div className="log-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setLogViewerOpen(false); }}>
+          <section className="log-viewer" aria-label="完整诊断日志">
+            <header className="log-viewer-header"><div><span className="eyebrow">DIAGNOSTICS</span><strong>完整诊断日志</strong><span>{logs.length} 条记录 · 主工作台不会跟随滚动</span></div><div className="report-viewer-actions"><button type="button" className="btn btn-secondary" onClick={jumpToLatestLog}>跳到最新</button><button type="button" className="icon-button" title="关闭诊断日志" aria-label="关闭诊断日志" onClick={() => setLogViewerOpen(false)}>×</button></div></header>
+            <div className="log-viewer-list">{logs.length ? logs.map((line, index) => <div className={`log-line ${line.level}`} key={`${line.t}-${index}`}><span>{line.t}</span><p>{line.msg}</p></div>) : <div className="log-empty">暂无日志</div>}<div ref={logEnd} /></div>
           </section>
         </div>
       )}

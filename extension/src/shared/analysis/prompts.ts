@@ -48,8 +48,9 @@ export const DEFAULT_USER_TEMPLATE = `请基于以下语料完成分析。
 议题树要求：
 1. 根节点必须是答主回答主旨（stance=author）。
 2. 一级 children 3~8 个，覆盖主要引申与立场；二级按需，总节点不宜超过 25。
-3. quote_ids 尽量引用语料中的真实评论 id。
-4. 分支要体现「引申出来的信息」，不是简单复制评论列表。
+3. quote_ids 必须是数组；无引用时写 []。
+4. children 必须是数组；叶节点必须写 "children": []，不得省略或写成 null/对象。
+5. 分支要体现「引申出来的信息」，不是简单复制评论列表。
 `;
 
 export function renderUserPrompt(

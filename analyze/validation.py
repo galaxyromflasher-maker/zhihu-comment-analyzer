@@ -13,6 +13,53 @@ class AnalysisValidationError(ValueError):
 _STANCES = {"author", "support", "oppose", "neutral", "mixed"}
 
 
+def normalize_analysis_result(result: Any) -> tuple[dict[str, Any], list[str]]:
+    """模型常省略叶节点 children；校验前补成 []，避免整单失败。"""
+    warnings: list[str] = []
+    if not isinstance(result, dict):
+        return {}, ["模型结果不是 JSON 对象，无法归一化"]
+
+    next_result = dict(result)
+    fixed_children = 0
+    fixed_quote_ids = 0
+
+    if not isinstance(next_result.get("controversies"), list):
+        if next_result.get("controversies") is not None:
+            warnings.append("已将 controversies 归一化为空数组")
+        next_result["controversies"] = []
+    if not isinstance(next_result.get("highlights"), list):
+        if next_result.get("highlights") is not None:
+            warnings.append("已将 highlights 归一化为空数组")
+        next_result["highlights"] = []
+
+    def normalize_node(node: Any) -> dict[str, Any] | None:
+        nonlocal fixed_children, fixed_quote_ids
+        if not isinstance(node, dict):
+            return None
+        out = dict(node)
+        if not isinstance(out.get("quote_ids"), list):
+            fixed_quote_ids += 1
+            out["quote_ids"] = []
+        children = out.get("children")
+        if not isinstance(children, list):
+            fixed_children += 1
+            out["children"] = []
+        else:
+            out["children"] = [c for c in (normalize_node(child) for child in children) if c]
+        return out
+
+    if next_result.get("topic_tree") is not None:
+        tree = normalize_node(next_result.get("topic_tree"))
+        if tree is not None:
+            next_result["topic_tree"] = tree
+
+    if fixed_children:
+        warnings.append(f"已为 {fixed_children} 个议题树节点补全空 children（模型常省略叶节点该字段）")
+    if fixed_quote_ids:
+        warnings.append(f"已为 {fixed_quote_ids} 个议题树节点补全空 quote_ids")
+    return next_result, warnings
+
+
 def validate_analysis_result(
     result: Any,
     comment_ids: set[str] | None = None,
@@ -104,9 +151,11 @@ def validate_analysis_result(
 def assert_valid_analysis_result(
     result: Any,
     comment_ids: set[str] | None = None,
-) -> list[str]:
-    validation = validate_analysis_result(result, comment_ids)
+) -> tuple[dict[str, Any], list[str]]:
+    normalized, normalize_warnings = normalize_analysis_result(result)
+    validation = validate_analysis_result(normalized, comment_ids)
+    warnings = [*normalize_warnings, *validation["warnings"]]
     if validation["errors"]:
-        raise AnalysisValidationError(validation["errors"], validation["warnings"])
-    return validation["warnings"]
+        raise AnalysisValidationError(validation["errors"], warnings)
+    return normalized, warnings
 

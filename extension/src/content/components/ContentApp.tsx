@@ -50,7 +50,7 @@ export function ContentApp() {
       {pageInfo.type === 'column' && collectionInfo && <ColumnPanel info={collectionInfo} />}
       {pageInfo.type === 'profile' && collectionInfo && <ProfilePanel info={collectionInfo} />}
       {!['collection', 'column', 'profile'].includes(pageInfo.type) && content && (
-        <ArticlePanel content={content} pageInfo={pageInfo} />
+        <ArticlePanel key={`${pageInfo.type}-${pageInfo.id}`} content={content} pageInfo={pageInfo} />
       )}
     </PanelWrapper>
   );

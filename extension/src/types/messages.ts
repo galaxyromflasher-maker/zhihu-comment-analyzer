@@ -1,6 +1,7 @@
 /** Content Script / Extension Page → Service Worker 消息 */
 export type ExtensionMessage =
   | { action: 'openExportPage'; url: string }
+  | { action: 'openWorkbench' }
   | { action: 'proxyFetch'; url: string; responseType?: 'text' | 'json' }
 
 /** Service Worker → Content Script 消息 */

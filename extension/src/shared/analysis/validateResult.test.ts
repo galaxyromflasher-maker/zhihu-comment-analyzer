@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { assertValidAnalysisResult, validateAnalysisResult } from './validateResult';
+import {
+  assertValidAnalysisResult,
+  normalizeAnalysisResult,
+  validateAnalysisResult,
+} from './validateResult';
 
 function validResult() {
   return {
@@ -21,7 +25,8 @@ function validResult() {
 
 describe('validateAnalysisResult', () => {
   it('接受符合契约的模型结果', () => {
-    expect(assertValidAnalysisResult(validResult(), new Set(['c1']))).toEqual({ errors: [], warnings: [] });
+    const { validation } = assertValidAnalysisResult(validResult(), new Set(['c1']));
+    expect(validation).toEqual({ errors: [], warnings: [] });
   });
 
   it('拒绝缺少关键结构的结果', () => {
@@ -34,5 +39,30 @@ describe('validateAnalysisResult', () => {
   it('把不存在的引用标为提醒而不是静默输出', () => {
     const result = validateAnalysisResult(validResult(), new Set(['other']));
     expect(result.warnings.some((warning) => warning.includes('不存在的评论'))).toBe(true);
+  });
+
+  it('归一化叶节点缺失的 children 后可通过校验', () => {
+    const raw = validResult();
+    raw.topic_tree.children = [
+      {
+        id: 'branch',
+        title: '原生家庭与习得性无助',
+        summary: '评论侧观点。',
+        stance: 'mixed',
+        quote_ids: ['c1'],
+        // 故意省略 children，模拟模型输出
+      } as any,
+    ];
+    const { normalized, validation } = assertValidAnalysisResult(raw, new Set(['c1']));
+    expect((normalized.topic_tree as any).children[0].children).toEqual([]);
+    expect(validation.warnings.some((w) => w.includes('补全空 children'))).toBe(true);
+  });
+
+  it('normalizeAnalysisResult 把 null children 收成 []', () => {
+    const raw = validResult();
+    (raw.topic_tree as any).children = null;
+    const { result, warnings } = normalizeAnalysisResult(raw);
+    expect((result.topic_tree as any).children).toEqual([]);
+    expect(warnings.some((w) => w.includes('children'))).toBe(true);
   });
 });

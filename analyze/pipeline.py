@@ -17,9 +17,9 @@ def analyze_bundle(bundle_path: str | Path, output_dir: str | Path | None = None
     validation = validate_bundle(bundle)
     corpus = build_llm_corpus(bundle)
 
-    result = chat_json(get_system_prompt(), build_user_prompt(corpus, validation))
+    raw_result = chat_json(get_system_prompt(), build_user_prompt(corpus, validation))
     comment_ids = {str(c.get("id", "")) for c in _flatten_comments(bundle.get("comments") or [])}
-    analysis_warnings = assert_valid_analysis_result(result, comment_ids)
+    result, analysis_warnings = assert_valid_analysis_result(raw_result, comment_ids)
 
     out_dir = Path(output_dir) if output_dir else bundle_path.parent / "analysis"
     out_dir.mkdir(parents=True, exist_ok=True)

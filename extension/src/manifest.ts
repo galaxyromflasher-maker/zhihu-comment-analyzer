@@ -4,7 +4,7 @@ import pkg from '../package.json';
 export default defineManifest({
   manifest_version: 3,
   name: '知乎分析采集器',
-  description: '知乎回答评论采集 + 一键生成议题树分析报告（工作台）',
+  description: '知乎回答评论采集 + 分析工作台（手动启动生成报告）',
   version: pkg.version,
   permissions: ['activeTab', 'storage', 'unlimitedStorage', 'scripting'],
   host_permissions: [
@@ -12,6 +12,14 @@ export default defineManifest({
     'https://zhuanlan.zhihu.com/*',
     'https://api.deepseek.com/*',
   ],
+  action: {
+    default_title: '打开分析工作台',
+    default_icon: {
+      '16': 'src/assets/icons/icon16.png',
+      '48': 'src/assets/icons/icon48.png',
+      '128': 'src/assets/icons/icon128.png',
+    },
+  },
   background: {
     service_worker: 'src/background/index.ts',
   },

@@ -54,6 +54,104 @@ export function extractContent(): ExtractedContent | null {
   return result;
 }
 
+function parseZop(el: Element): { itemId?: string; authorName?: string; type?: string } {
+  const raw = el.getAttribute('data-zop');
+  if (!raw) return {};
+  try {
+    const data = JSON.parse(raw) as { itemId?: string | number; authorName?: string; type?: string };
+    return {
+      itemId: data.itemId != null ? String(data.itemId) : undefined,
+      authorName: data.authorName,
+      type: data.type,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function answerIdFromHref(href: string | null, questionId: string): string | null {
+  if (!href) return null;
+  const match = href.match(new RegExp(`question/${questionId}/answer/(\\d+)`));
+  return match?.[1] || null;
+}
+
+function upsertAnswer(map: Map<string, ExtractedContent>, item: ExtractedContent): void {
+  const existing = map.get(item.id);
+  if (!existing) {
+    map.set(item.id, item);
+    return;
+  }
+  const nextHtml = (item.html || '').length > (existing.html || '').length ? item.html : existing.html;
+  map.set(item.id, {
+    ...existing,
+    ...item,
+    html: nextHtml || existing.html,
+    author: item.author && item.author !== '知乎用户' ? item.author : existing.author,
+    voteupCount: item.voteupCount ?? existing.voteupCount,
+    commentCount: item.commentCount ?? existing.commentCount,
+  });
+}
+
+/**
+ * 问题页上已加载的回答列表（首屏 JSON + 当前 DOM）。
+ * 滚动加载更多后需再调一次才会出现新卡片。
+ */
+export function listQuestionAnswers(questionId: string, questionTitle: string): ExtractedContent[] {
+  const map = new Map<string, ExtractedContent>();
+  const title = questionTitle || `知乎问题${questionId}`;
+
+  const initialData = extractInitialData() as any;
+  const answers = initialData?.initialState?.entities?.answers || {};
+  for (const key of Object.keys(answers)) {
+    const data = answers[key];
+    const id = String(data?.id || key);
+    if (!id) continue;
+    if (data?.question?.id != null && String(data.question.id) !== questionId) continue;
+    upsertAnswer(map, {
+      id,
+      type: 'answer',
+      url: `https://www.zhihu.com/question/${questionId}/answer/${id}`,
+      title,
+      author: data?.author?.name || '知乎用户',
+      html: data?.content || '',
+      createdTime: data?.created_time || null,
+      updatedTime: data?.updated_time || null,
+      questionId,
+      authorId: data?.author?.id != null ? String(data.author.id) : null,
+      authorUrlToken: data?.author?.url_token || null,
+      voteupCount: typeof data?.voteup_count === 'number' ? data.voteup_count : null,
+      commentCount: typeof data?.comment_count === 'number' ? data.comment_count : null,
+      _source: 'initialData',
+    });
+  }
+
+  const cards = document.querySelectorAll('.AnswerItem, .ContentItem.AnswerItem');
+  cards.forEach((card) => {
+    const zop = parseZop(card);
+    const link = card.querySelector<HTMLAnchorElement>(`a[href*="/question/${questionId}/answer/"]`);
+    const id = zop.itemId || answerIdFromHref(link?.getAttribute('href') || '', questionId);
+    if (!id) return;
+    const authorEl = card.querySelector('.AuthorInfo-name .UserLink-link, .AuthorInfo-name');
+    const contentEl = card.querySelector('.RichContent-inner, .RichText');
+    const voteEl = card.querySelector('[itemprop="upvoteCount"]');
+    const voteText = voteEl?.getAttribute('content') || voteEl?.textContent || '';
+    const voteupCount = voteText ? Number.parseInt(voteText.replace(/[^\d]/g, ''), 10) : NaN;
+    upsertAnswer(map, {
+      id,
+      type: 'answer',
+      url: `https://www.zhihu.com/question/${questionId}/answer/${id}`,
+      title,
+      author: (authorEl?.textContent || zop.authorName || '').trim() || '知乎用户',
+      html: (contentEl as HTMLElement | null)?.innerHTML || '',
+      questionId,
+      voteupCount: Number.isFinite(voteupCount) ? voteupCount : null,
+      _source: 'DOM',
+    });
+  });
+
+  return Array.from(map.values());
+}
+
 function extractInitialData(): unknown | null {
   const scriptTag = document.querySelector('script#js-initialData[type="text/json"]');
   if (!scriptTag || !scriptTag.textContent) return null;

@@ -1,13 +1,29 @@
 /**
  * Service Worker：消息中转
- * 1. content script → 打开导出页面
- * 2. Extension Page → content script 代理 API 请求（保持同源）
+ * 1. content script → 打开导出/工作台页面
+ * 2. 工具栏图标 → 直接打开分析工作台（无需经过知乎页）
+ * 3. Extension Page → content script 代理 API 请求（保持同源）
  */
 
+function workbenchUrl() {
+  return chrome.runtime.getURL('src/workbench/index.html');
+}
+
+function openWorkbenchTab(url = workbenchUrl()) {
+  return chrome.tabs.create({ url });
+}
+
+chrome.action.onClicked.addListener(() => {
+  void openWorkbenchTab();
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.action === 'openExportPage') {
-    chrome.tabs.create({ url: message.url });
-    return;
+  if (message.action === 'openWorkbench' || message.action === 'openExportPage') {
+    const url = message.url || workbenchUrl();
+    openWorkbenchTab(url)
+      .then((tab) => sendResponse({ ok: true, tabId: tab.id, url }))
+      .catch((err: Error) => sendResponse({ ok: false, error: err.message }));
+    return true;
   }
 
   // Extension Page 请求代理

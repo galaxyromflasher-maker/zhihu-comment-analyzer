@@ -21,6 +21,65 @@ function isRecord(value: unknown): value is AnyRecord {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+/** 模型常省略叶节点 children / quote_ids；校验前归一化为空数组，避免整单失败。 */
+export function normalizeAnalysisResult(result: unknown): {
+  result: AnyRecord;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  if (!isRecord(result)) {
+    return { result: {}, warnings: ['模型结果不是 JSON 对象，无法归一化'] };
+  }
+
+  const next: AnyRecord = { ...result };
+  let fixedChildren = 0;
+  let fixedQuoteIds = 0;
+
+  if (!Array.isArray(next.controversies)) {
+    if (next.controversies != null) warnings.push('已将 controversies 归一化为空数组');
+    next.controversies = [];
+  }
+  if (!Array.isArray(next.highlights)) {
+    if (next.highlights != null) warnings.push('已将 highlights 归一化为空数组');
+    next.highlights = [];
+  }
+
+  const normalizeNode = (node: unknown, path: string): AnyRecord | null => {
+    if (!isRecord(node)) return null;
+    const out: AnyRecord = { ...node };
+    const title = String(out.title || path);
+
+    if (!Array.isArray(out.quote_ids)) {
+      fixedQuoteIds += 1;
+      out.quote_ids = [];
+    }
+
+    if (!Array.isArray(out.children)) {
+      fixedChildren += 1;
+      out.children = [];
+    } else {
+      out.children = out.children
+        .map((child: unknown, index: number) => normalizeNode(child, `${title}/${index}`))
+        .filter(Boolean);
+    }
+    return out;
+  };
+
+  if (next.topic_tree != null) {
+    const tree = normalizeNode(next.topic_tree, 'root');
+    if (tree) next.topic_tree = tree;
+  }
+
+  if (fixedChildren > 0) {
+    warnings.push(`已为 ${fixedChildren} 个议题树节点补全空 children（模型常省略叶节点该字段）`);
+  }
+  if (fixedQuoteIds > 0) {
+    warnings.push(`已为 ${fixedQuoteIds} 个议题树节点补全空 quote_ids`);
+  }
+
+  return { result: next, warnings };
+}
+
 function walkTree(
   value: unknown,
   depth: number,
@@ -141,11 +200,13 @@ export function validateAnalysisResult(
 export function assertValidAnalysisResult(
   result: unknown,
   commentIds?: Set<string>,
-): AnalysisValidation {
-  const validation = validateAnalysisResult(result, commentIds);
+): { normalized: AnyRecord; validation: AnalysisValidation } {
+  const { result: normalized, warnings: normalizeWarnings } = normalizeAnalysisResult(result);
+  const validation = validateAnalysisResult(normalized, commentIds);
+  validation.warnings = [...normalizeWarnings, ...validation.warnings];
   if (validation.errors.length > 0) {
     throw new AnalysisResultValidationError(validation);
   }
-  return validation;
+  return { normalized, validation };
 }
 

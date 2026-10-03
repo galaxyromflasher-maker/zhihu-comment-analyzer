@@ -1,8 +1,9 @@
-import React, { useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Space, Tag, Radio, Checkbox, Button, Progress, Typography } from 'antd';
 import JSZip from 'jszip';
 
 import type { CommentFetchResult, ExtractedContent, PageInfo } from '@/types/zhihu';
+import { listQuestionAnswers } from '@/content/detector';
 import { useFolderHandle } from '@/content/hooks/useFolderHandle';
 import {
   extractImageUrls,
@@ -29,6 +30,7 @@ import { fetchAllComments } from '@/shared/api/zhihu-api';
 import { setOnRetry } from '@/shared/api/throttle';
 import type { ZhihuComment } from '@/types/zhihu';
 import { createTaskId, setPendingTask } from '@/shared/analysis/task';
+import { openWorkbenchPage } from '@/shared/analysis/openWorkbench';
 
 interface ArticlePanelProps {
   content: ExtractedContent;
@@ -52,13 +54,45 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
   const [statusText, setStatusText] = useState('');
   const [progress, setProgress] = useState<{ percent: number; text: string } | null>(null);
   const [logs, setLogs] = useState<LogItem[]>([]);
+  const [answerList, setAnswerList] = useState<ExtractedContent[]>([]);
+  const [selectedAnswerId, setSelectedAnswerId] = useState('');
+  const questionId = content.questionId
+    || (pageInfo.type === 'question' ? pageInfo.id : null)
+    || window.location.href.match(/question\/(\d+)/)?.[1]
+    || null;
+  const canPickAnswers = Boolean(questionId) && (pageInfo.type === 'question' || pageInfo.type === 'answer');
 
   const logEndRef = useRef<HTMLDivElement>(null);
   const { dirHandle, pickFolder, verifyDirHandle } = useFolderHandle();
 
+  const refreshAnswerList = useCallback(() => {
+    if (!canPickAnswers || !questionId) return [];
+    const list = listQuestionAnswers(questionId, content.title);
+    setAnswerList(list);
+    setSelectedAnswerId((prev) => {
+      if (prev && list.some((item) => item.id === prev)) return prev;
+      if (pageInfo.type === 'answer' && list.some((item) => item.id === pageInfo.id)) return pageInfo.id;
+      return list[0]?.id || (pageInfo.type === 'answer' ? pageInfo.id : '');
+    });
+    return list;
+  }, [canPickAnswers, questionId, content.title, pageInfo.type, pageInfo.id]);
+
+  useEffect(() => {
+    refreshAnswerList();
+  }, [refreshAnswerList]);
+
+  const selectedAnswer = answerList.find((item) => item.id === selectedAnswerId) || null;
+  const activeContent = canPickAnswers
+    ? (selectedAnswer || (pageInfo.type === 'answer' ? content : null))
+    : content;
+  const activePageInfo: PageInfo | null = canPickAnswers
+    ? (activeContent ? { type: 'answer', id: activeContent.id } : null)
+    : pageInfo;
+  const canRun = Boolean(activeContent && activePageInfo);
+
   const imgUrls = useMemo(
-    () => extractImageUrls(content.html || ''),
-    [content.html],
+    () => extractImageUrls(activeContent?.html || ''),
+    [activeContent?.html],
   );
 
   const addLog = useCallback((msg: string, type = 'info') => {
@@ -93,34 +127,41 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
   const buildBundleText = useCallback(
     (comments: ZhihuComment[], collection: CommentFetchResult) => {
+      if (!activeContent) return '';
       const warnings: string[] = [];
       return stringifyBundle(
         buildExportBundle({
-          content,
+          content: activeContent,
           comments,
-          expectedCommentCount: content.commentCount ?? null,
+          expectedCommentCount: activeContent.commentCount ?? null,
           collectionMeta: collection.collectionMeta,
           warnings,
         }),
       );
     },
-    [content],
+    [activeContent],
   );
 
   const handleDownload = useCallback(async () => {
+    if (!activeContent || !activePageInfo) {
+      addLog('请先选择一条回答。可在问题页向下滚动后再点「刷新回答列表」。', 'warn');
+      return;
+    }
+    const target = activeContent;
+    const targetPage = activePageInfo;
     setIsExporting(true);
 
     const effectiveWantImages = wantImages && imgUrls.length > 0;
     const baseName = sanitizeFilename(
-      `${content.title}-${content.author}的${TYPE_LABELS[content.type] || content.type}`,
+      `${target.title}-${target.author}的${TYPE_LABELS[target.type] || target.type}`,
     );
     const commentFileName = `${baseName}-评论.md`;
     const bundleFileName = `${baseName}.bundle.json`;
     const needComments = wantComment || wantBundle;
     const needZip = effectiveWantImages || wantComment || wantBundle;
 
-    addLog(`开始导出: type=${content.type}, title="${content.title}", author="${content.author}"`);
-    addLog(`内容来源: ${content._source || '未知'}`);
+    addLog(`开始导出: type=${target.type}, title="${target.title}", author="${target.author}"`);
+    addLog(`内容来源: ${target._source || '未知'}`);
 
     // 设置 403 重试回调
     setOnRetry((retryCount: number, maxRetries: number, waitMs: number) => {
@@ -131,13 +172,13 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
     // 计算 HTML 纯文本长度用于对比
     const tmpDiv = document.createElement('div');
-    tmpDiv.innerHTML = content.html || '';
+    tmpDiv.innerHTML = target.html || '';
     const plainTextLen = (tmpDiv.textContent || '').length;
-    addLog(`HTML 长度: ${(content.html || '').length}, 纯文本: ${plainTextLen}, 图片: ${imgUrls.length} 张`);
+    addLog(`HTML 长度: ${(target.html || '').length}, 纯文本: ${plainTextLen}, 图片: ${imgUrls.length} 张`);
     addLog(`选项: FM=${wantFm}, 图片=${effectiveWantImages}, 评论=${wantComment}, JSON=${wantBundle}`);
     addLog(`文件名: ${baseName}`);
 
-    if (!content.html) {
+    if (!target.html) {
       addLog('警告：HTML 内容为空，导出的 Markdown 将没有正文', 'warn');
     }
 
@@ -165,9 +206,9 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
         addLog('正在转换 Markdown...');
         showProgress(1, 1, '正在生成 Markdown...');
-        let md = htmlToMarkdown(content.html, imageMapping);
+        let md = htmlToMarkdown(target.html, imageMapping);
         const mdTextLen = md.length;
-        if (wantFm) md = buildFrontmatter(content) + md;
+        if (wantFm) md = buildFrontmatter(target) + md;
         addLog(`Markdown 生成完成: ${mdTextLen} 字符（含FM: ${md.length}）`);
         if (plainTextLen > 0 && mdTextLen < plainTextLen * 0.5) {
           addLog(`警告：Markdown(${mdTextLen}) 远小于纯文本(${plainTextLen})，可能有内容丢失`, 'warn');
@@ -179,10 +220,10 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
         if (needComments) {
           setStatusText('正在加载评论...');
-          addLog(`加载评论: type=${pageInfo.type}, id=${pageInfo.id}`);
+          addLog(`加载评论: type=${targetPage.type}, id=${targetPage.id}`);
           const collection = await fetchAllComments(
-            pageInfo.type,
-            pageInfo.id,
+            targetPage.type,
+            targetPage.id,
             (done, total) => {
               showProgress(done, total, `正在加载子评论 ${done}/${total}...`);
             },
@@ -201,7 +242,7 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
           if (wantComment) {
             showProgress(1, 1, '正在生成评论 Markdown...');
-            commentMd = buildCommentsMarkdown(comments, content.title, commentImageMapping);
+            commentMd = buildCommentsMarkdown(comments, target.title, commentImageMapping);
             const encodedCommentFile = encodeURIComponent(commentFileName)
               .replace(/\(/g, '%28')
               .replace(/\)/g, '%29');
@@ -257,15 +298,15 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
         showProgress(1, 1, '正在生成 Word 文档...');
         const frontMatter = wantFm
           ? {
-              id: content.id,
-              title: content.title,
-              author: content.author,
-              url: content.url,
-              createdTime: content.createdTime,
-              updatedTime: content.updatedTime,
+              id: target.id,
+              title: target.title,
+              author: target.author,
+              url: target.url,
+              createdTime: target.createdTime,
+              updatedTime: target.updatedTime,
             }
           : null;
-        const docxBlob = await htmlToDocx(content.html, {
+        const docxBlob = await htmlToDocx(target.html, {
           images: docxImgMode,
           imageData,
           frontMatter,
@@ -274,10 +315,10 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
         if (needComments) {
           setStatusText('正在加载评论...');
-          addLog(`加载评论: type=${pageInfo.type}, id=${pageInfo.id}`);
+          addLog(`加载评论: type=${targetPage.type}, id=${targetPage.id}`);
           const collection = await fetchAllComments(
-            pageInfo.type,
-            pageInfo.id,
+            targetPage.type,
+            targetPage.id,
             (done, total) => {
               showProgress(done, total, `正在加载子评论 ${done}/${total}...`);
             },
@@ -289,7 +330,7 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
           zip.file(`${baseName}.docx`, docxBlob);
           if (wantComment) {
             showProgress(1, 1, '正在生成评论文档...');
-            const commentBlob = await commentsToDocx(comments, content.title);
+            const commentBlob = await commentsToDocx(comments, target.title);
             zip.file(`${baseName}-评论.docx`, commentBlob);
           }
           if (wantBundle) {
@@ -322,10 +363,17 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
     }
   }, [
     format, wantFm, wantComment, wantBundle, wantImages, docxImgMode,
-    content, pageInfo, imgUrls, addLog, showProgress, hideProgress, buildBundleText,
+    imgUrls, addLog, showProgress, hideProgress, buildBundleText,
+    activeContent, activePageInfo,
   ]);
 
   const handleSaveToFolder = useCallback(async () => {
+    if (!activeContent || !activePageInfo) {
+      addLog('请先选择一条回答。可在问题页向下滚动后再点「刷新回答列表」。', 'warn');
+      return;
+    }
+    const target = activeContent;
+    const targetPage = activePageInfo;
     let handle = dirHandle;
 
     // 如果没有已选文件夹，先弹选择器
@@ -345,7 +393,7 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
     const effectiveWantImages = wantImages && imgUrls.length > 0;
     const baseName = sanitizeFilename(
-      `${content.title}-${content.author}的${TYPE_LABELS[content.type] || content.type}`,
+      `${target.title}-${target.author}的${TYPE_LABELS[target.type] || target.type}`,
     );
     const commentFileName = `${baseName}-评论.md`;
     const bundleFileName = `${baseName}.bundle.json`;
@@ -369,14 +417,14 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
 
         addLog('正在转换 Markdown...');
         setStatusText('正在生成 Markdown...');
-        let md = htmlToMarkdown(content.html, imageMapping);
-        if (wantFm) md = buildFrontmatter(content) + md;
+        let md = htmlToMarkdown(target.html, imageMapping);
+        if (wantFm) md = buildFrontmatter(target) + md;
 
         if (needComments) {
           setStatusText('正在加载评论...');
           const collection = await fetchAllComments(
-            pageInfo.type,
-            pageInfo.id,
+            targetPage.type,
+            targetPage.id,
             (done, total) => {
               showProgress(done, total, `正在加载子评论 ${done}/${total}...`);
             },
@@ -407,7 +455,7 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
           }
 
           if (wantComment) {
-            const commentMd = buildCommentsMarkdown(comments, content.title, commentImageMapping);
+            const commentMd = buildCommentsMarkdown(comments, target.title, commentImageMapping);
             await writeTextFile(handle, commentFileName, commentMd);
             addLog(`评论已保存: ${commentFileName}`);
 
@@ -442,15 +490,15 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
         setStatusText('正在生成 Word 文档...');
         const frontMatter = wantFm
           ? {
-              id: content.id,
-              title: content.title,
-              author: content.author,
-              url: content.url,
-              createdTime: content.createdTime,
-              updatedTime: content.updatedTime,
+              id: target.id,
+              title: target.title,
+              author: target.author,
+              url: target.url,
+              createdTime: target.createdTime,
+              updatedTime: target.updatedTime,
             }
           : null;
-        const docxBlob = await htmlToDocx(content.html, {
+        const docxBlob = await htmlToDocx(target.html, {
           images: docxImgMode,
           imageData,
           frontMatter,
@@ -459,8 +507,8 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
         if (needComments) {
           setStatusText('正在加载评论...');
           const collection = await fetchAllComments(
-            pageInfo.type,
-            pageInfo.id,
+            targetPage.type,
+            targetPage.id,
             (done, total) => {
               showProgress(done, total, `正在加载子评论 ${done}/${total}...`);
             },
@@ -469,7 +517,7 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
           addLog(`评论加载完成: ${comments.length} 条根评论`);
 
           if (wantComment) {
-            const commentBlob = await commentsToDocx(comments, content.title);
+            const commentBlob = await commentsToDocx(comments, target.title);
             await writeBlobFile(handle, `${baseName}-评论.docx`, commentBlob);
             addLog(`评论已保存: ${baseName}-评论.docx`);
           }
@@ -497,21 +545,55 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
     }
   }, [
     format, wantFm, wantComment, wantBundle, wantImages, docxImgMode,
-    content, pageInfo, imgUrls, dirHandle, pickFolder, verifyDirHandle,
+    activeContent, activePageInfo, imgUrls, dirHandle, pickFolder, verifyDirHandle,
     addLog, showProgress, hideProgress, buildBundleText,
   ]);
 
   return (
     <Space direction="vertical" style={{ width: '100%' }} size="small">
-      {/* Info rows */}
       <div>
-        <Tag color="blue">{TYPE_LABELS[content.type] || content.type}</Tag>
+        <Tag color="blue">{TYPE_LABELS[activeContent?.type || content.type] || content.type}</Tag>
       </div>
       <Typography.Text strong>{content.title}</Typography.Text>
-      <Typography.Text type="secondary">{content.author}</Typography.Text>
+      {canPickAnswers ? (
+        <>
+          <Typography.Text type="secondary">
+            已识别 {answerList.length} 条回答（当前页已加载的）。滚动加载更多后点刷新。
+          </Typography.Text>
+          <select
+            value={selectedAnswerId}
+            onChange={(event) => setSelectedAnswerId(event.target.value)}
+            disabled={!answerList.length && pageInfo.type !== 'answer'}
+            style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid #d9d9d9' }}
+          >
+            {answerList.length === 0 && pageInfo.type !== 'answer' && (
+              <option value="">暂无回答，请先滚动页面</option>
+            )}
+            {answerList.length === 0 && pageInfo.type === 'answer' && (
+              <option value={pageInfo.id}>{content.author}（当前回答）</option>
+            )}
+            {answerList.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.author}
+                {item.id === pageInfo.id && pageInfo.type === 'answer' ? '（当前）' : ''}
+                {item.voteupCount != null ? ` · ${item.voteupCount} 赞` : ''}
+              </option>
+            ))}
+          </select>
+          <Button size="small" onClick={() => {
+            const list = refreshAnswerList();
+            addLog(`已刷新回答列表：${list.length} 条`);
+          }}>
+            刷新回答列表
+          </Button>
+        </>
+      ) : (
+        <Typography.Text type="secondary">{content.author}</Typography.Text>
+      )}
       <Typography.Text type="secondary">
+        {activeContent ? `${activeContent.author} · ` : ''}
         图片: {imgUrls.length > 0 ? `${imgUrls.length} 张` : '无'} ·
-        内容: {content.html ? `${content.html.length} 字符` : '空'}
+        内容: {activeContent?.html ? `${activeContent.html.length} 字符` : '空'}
       </Typography.Text>
 
       {/* Options */}
@@ -552,22 +634,26 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
         </Typography.Text>
       )}
 
-      {/* Action buttons */}
+      {/* 预填当前回答任务并打开工作台；真正开跑需在工作台点「启动」 */}
       <Button
         type="primary"
         block
-        disabled={isExporting}
+        disabled={isExporting || !canRun}
         onClick={async () => {
+          if (!activeContent || !activePageInfo) {
+            addLog('请先选择一条回答。可向下滚动后再点「刷新回答列表」。', 'warn');
+            return;
+          }
           try {
-            addLog('创建分析任务并打开工作台…');
+            addLog(`正在打开工作台并预填：${activeContent.author} 的回答…`);
             await setPendingTask({
               id: createTaskId(),
-              content,
-              pageInfo,
+              content: activeContent,
+              pageInfo: activePageInfo,
               createdAt: Date.now(),
             });
-            const url = chrome.runtime.getURL('src/workbench/index.html');
-            chrome.runtime.sendMessage({ action: 'openExportPage', url });
+            await openWorkbenchPage();
+            addLog('已打开工作台（需在工作台点「启动」）', 'success');
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             addLog(`打开工作台失败: ${msg}`, 'error');
@@ -575,9 +661,9 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
         }}
         style={{ background: '#0f6a5c', borderColor: '#0f6a5c' }}
       >
-        生成报告（工作台）
+        打开工作台
       </Button>
-      <Button type="default" block loading={isExporting} onClick={handleDownload}>
+      <Button type="default" block loading={isExporting} disabled={!canRun} onClick={handleDownload}>
         {isExporting ? statusText : downloadBtnText}
       </Button>
 
@@ -592,6 +678,7 @@ export function ArticlePanel({ content, pageInfo }: ArticlePanelProps) {
           block
           onClick={handleSaveToFolder}
           loading={isExporting}
+          disabled={!canRun}
           style={{ background: '#00994d', borderColor: '#00994d', color: '#fff' }}
         >
           保存到文件夹

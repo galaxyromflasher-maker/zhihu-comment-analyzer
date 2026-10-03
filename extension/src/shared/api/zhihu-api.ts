@@ -89,7 +89,8 @@ export function detectPage(url: string): PageInfo | null {
   const patterns = [
     { type: 'answer' as const, regex: /zhihu\.com\/question\/(\d+)\/answer\/(\d+)/ },
     { type: 'article' as const, regex: /zhuanlan\.zhihu\.com\/p\/(\d+)/ },
-    { type: 'question' as const, regex: /zhihu\.com\/question\/(\d+)\/?(\?|$|#)/ },
+    // 纯问题页、以及 /question/id/answers/updated 这类列表路径
+    { type: 'question' as const, regex: /zhihu\.com\/question\/(\d+)/ },
     { type: 'pin' as const, regex: /zhihu\.com\/pin\/(\d+)/ },
     { type: 'collection' as const, regex: /zhihu\.com\/collection\/(\d+)/ },
     { type: 'column' as const, regex: /zhihu\.com\/column\/([^/?#]+)/ },
